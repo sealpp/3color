@@ -478,8 +478,8 @@
     el.btnMode.classList.toggle('on', manualMode);
     el.btnMode.setAttribute('aria-pressed', String(manualMode));
     el.btnMode.textContent = manualMode ? '手动' : '自动';
-    // 手动模式无需间隔，禁用滑轨
-    el.intervalRow.classList.toggle('disabled', manualMode);
+    // 手动模式：只禁用滑轨本身（不能禁用整行，否则会连同模式按钮一起 pointer-events:none）
+    el.intervalTrack.classList.toggle('disabled', manualMode);
     toast(manualMode ? '手动模式：每按一次快门拍一个通道' : '自动模式：自动按间隔连拍三通道');
   }
 

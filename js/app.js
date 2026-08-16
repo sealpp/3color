@@ -475,8 +475,9 @@
   function toggleMode() {
     if (state !== 'idle') return; // 拍摄中不允许切换
     manualMode = !manualMode;
-    el.btnMode.classList.toggle('on', manualMode);
-    el.btnMode.setAttribute('aria-pressed', String(manualMode));
+    // 高亮 = 自动模式；不亮 = 手动模式
+    el.btnMode.classList.toggle('on', !manualMode);
+    el.btnMode.setAttribute('aria-pressed', String(!manualMode));
     el.btnMode.textContent = manualMode ? '手动' : '自动';
     // 手动模式：只禁用滑轨本身（不能禁用整行，否则会连同模式按钮一起 pointer-events:none）
     el.intervalTrack.classList.toggle('disabled', manualMode);

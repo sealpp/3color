@@ -1,0 +1,38 @@
+{
+  "name": "3color · 三色影相",
+  "short_name": "3color",
+  "description": "模拟 Sergei Prokudin-Gorskii 三色摄影法的复古相机：红、绿、蓝三通道依次曝光，再合成一张完整的彩色照片。",
+  "lang": "zh-CN",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#12100d",
+  "theme_color": "#12100d",
+  "categories": ["photography", "utilities"],
+  "icons": [
+    {
+      "src": "icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icons/icon-512-maskable.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}

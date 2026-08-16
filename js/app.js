@@ -1,0 +1,996 @@
+/* =========================================================
+   3color · 三色影相
+   三色摄影法：依次以红、绿、蓝通道曝光，模拟 Prokudin-Gorskii
+   弹簧机构相机的曝光延迟，最后按 RGB 通道合成彩色照片。
+   ========================================================= */
+(function () {
+  'use strict';
+
+  /* ---------------- helpers ---------------- */
+  var $ = function (s, el) { return (el || document).querySelector(s); };
+  var $$ = function (s, el) { return Array.prototype.slice.call((el || document).querySelectorAll(s)); };
+  var clamp = function (v, a, b) { return Math.min(b, Math.max(a, v)); };
+  var sleep = function (ms) { return new Promise(function (res) { setTimeout(res, ms); }); };
+  var isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+  /* ---------------- constants ---------------- */
+  var MAX_SIZE = 1280;          // 采集分辨率（正方形）
+  var DEFAULT_INTERVAL = 3;     // 默认换版间隔（秒）
+  var INTERVAL_MIN = 0;         // 间隔可调范围（秒）
+  var INTERVAL_MAX = 8;
+  var CHANNELS = [
+    { key: 'r', letter: 'R', name: '红色通道', color: '#d9534f' },
+    { key: 'g', letter: 'G', name: '绿色通道', color: '#7cb26a' },
+    { key: 'b', letter: 'B', name: '蓝色通道', color: '#6f8fd1' }
+  ];
+  var DB_NAME = '3color-history';
+  var DB_VER = 1;
+  var STORE = 'photos';
+
+  /* ---------------- elements ---------------- */
+  var el = {
+    screens: { intro: $('#screen-intro'), camera: $('#screen-camera'), result: $('#screen-result') },
+    video: $('#video'),
+    btnStart: $('#btn-start'),
+    btnShoot: $('#btn-shoot'),
+    btnCancelShoot: $('#btn-cancel-shoot'),
+    btnHistory: $('#btn-history'),
+    btnVintage: $('#btn-vintage'),
+    btnVintage2: $('#btn-vintage2'),
+    btnRetake: $('#btn-retake'),
+    btnSave: $('#btn-save'),
+    btnMode: $('#btn-mode'),
+    chip: $('#chip'),
+    holdMsg: $('#hold-msg'),
+    springTimer: $('#spring-timer'),
+    stFg: $('#st-fg'),
+    plates: $$('.plate'),
+    progressFill: $('#progress-fill'),
+    intervalRow: $('#interval-row'),
+    intervalTrack: $('#slider-track'),
+    sliderFill: $('#slider-fill'),
+    sliderThumb: $('#slider-thumb'),
+    thumbVal: $('#thumb-val'),
+    plateStrip: $('#plate-strip'),
+    resultImg: $('#result-img'),
+    historyModal: $('#history-modal'),
+    historyGrid: $('#history-grid'),
+    detailModal: $('#detail-modal'),
+    detailImg: $('#detail-img'),
+    detailVintage: $('#detail-vintage'),
+    detailTime: $('#detail-time'),
+    toast: $('#toast'),
+    installBtn: $('#install-btn')
+  };
+
+  /* ---------------- state ---------------- */
+  var state = 'idle';            // idle | shooting | done
+  var stream = null;
+  var capCanvas = document.createElement('canvas');
+  var capCtx = capCanvas.getContext('2d', { willReadFrequently: true });
+  var plates = [];               // [{ img: ImageData(灰度), thumb: canvas, letter }]
+  var rawCanvas = null;          // 未处理合成
+  var finalCanvas = null;        // 展示版本（复古滤镜后）
+  var shootAbort = false;
+  var vintageOn = true;
+  var soundOn = true;
+  var springDelay = DEFAULT_INTERVAL * 1000; // 换版间隔（毫秒），可调
+  var manualMode = false;   // false=自动间隔模式（默认），true=手动逐通道模式
+  var manualIndex = 0;      // 手动模式已拍通道数
+  var manualBusy = false;   // 手动模式防连点锁
+  var deferredPrompt = null;
+  var actx = null;
+
+  /* ---------------- audio（合成音效） ---------------- */
+  function beep(freq, dur, gain, type) {
+    if (!soundOn) return;
+    try {
+      actx = actx || new (window.AudioContext || window.webkitAudioContext)();
+      if (actx.state === 'suspended') actx.resume();
+      var o = actx.createOscillator();
+      var g = actx.createGain();
+      o.type = type || 'sine';
+      o.frequency.value = freq;
+      g.gain.setValueAtTime(gain, actx.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.0001, actx.currentTime + dur);
+      o.connect(g); g.connect(actx.destination);
+      o.start(); o.stop(actx.currentTime + dur + 0.02);
+    } catch (e) { /* ignore */ }
+  }
+  function shutter() {
+    beep(150, 0.16, 0.3, 'triangle');
+    setTimeout(function () { beep(90, 0.2, 0.25, 'triangle'); }, 70);
+  }
+  function springTick() { beep(300, 0.05, 0.045, 'square'); }
+
+  /* ---------------- toast ---------------- */
+  var toastTimer = null;
+  function toast(msg, dur) {
+    el.toast.textContent = msg;
+    el.toast.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { el.toast.classList.remove('show'); }, dur || 2600);
+  }
+
+  /* ---------------- screens ---------------- */
+  function showScreen(name) {
+    Object.keys(el.screens).forEach(function (k) {
+      el.screens[k].classList.toggle('hidden', k !== name);
+    });
+  }
+
+  /* ---------------- camera ---------------- */
+  function openCamera() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      return Promise.reject(new Error('no-camera-api'));
+    }
+    var base = {
+      audio: false,
+      video: {
+        facingMode: { ideal: 'environment' },
+        width: { ideal: 1920 },
+        height: { ideal: 1920 }
+      }
+    };
+    return navigator.mediaDevices.getUserMedia(base).catch(function () {
+      // 无后置摄像头（如桌面）时回退到任意可用摄像头
+      return navigator.mediaDevices.getUserMedia({ audio: false, video: true });
+    });
+  }
+
+  function stopCamera() {
+    if (stream) {
+      stream.getTracks().forEach(function (t) { t.stop(); });
+      stream = null;
+    }
+  }
+
+  function waitVideoReady() {
+    return new Promise(function (res) {
+      // readyState >= 2（HAVE_CURRENT_DATA）后 drawImage 才可靠
+      if (el.video.readyState >= 2 && el.video.videoWidth > 0) { res(); return; }
+      var done = function () {
+        el.video.removeEventListener('loadeddata', done);
+        el.video.removeEventListener('canplay', done);
+        res();
+      };
+      el.video.addEventListener('loadeddata', done);
+      el.video.addEventListener('canplay', done);
+      // 兜底：4 秒仍未就绪仍继续（避免极端情况下无限等待）
+      setTimeout(function () {
+        el.video.removeEventListener('loadeddata', done);
+        el.video.removeEventListener('canplay', done);
+        res();
+      }, 4000);
+    });
+  }
+
+  function acquireAndPlay() {
+    stopCamera();
+    return openCamera().then(function (s) {
+      stream = s;
+      el.video.srcObject = s;
+      return el.video.play().then(waitVideoReady);
+    });
+  }
+
+  function cameraErrorMessage(e) {
+    if (!navigator.mediaDevices) return '当前环境不支持摄像头（需要 HTTPS 或 localhost）';
+    if (e && e.name === 'NotAllowedError') return '摄像头权限被拒绝，请在浏览器设置中允许';
+    if (e && e.name === 'NotFoundError') return '未找到可用摄像头';
+    if (e && e.name === 'NotReadableError') return '摄像头被其他应用占用';
+    return '无法启动相机，请检查权限或更换浏览器';
+  }
+
+  /* ---------------- capture ---------------- */
+  function cropRect() {
+    var vw = el.video.videoWidth || 0;
+    var vh = el.video.videoHeight || 0;
+    var s = Math.min(vw, vh) || 1;
+    return { x: Math.round((vw - s) / 2), y: Math.round((vh - s) / 2), s: s };
+  }
+
+  async function snapToPlate(chIdx) {
+    // 确保视频帧真正可绘制（iOS 上 metadata 已就绪但首帧未到的情况常见）
+    await waitVideoReady();
+    var rect = cropRect();
+    if (!rect.s || rect.s < 2) throw new Error('视频未就绪');
+    var scale = Math.min(1, MAX_SIZE / rect.s);
+    var out = Math.max(2, Math.round(rect.s * scale));
+    capCanvas.width = out;
+    capCanvas.height = out;
+    // iOS 上偶发 drawImage 抛错（InvalidStateError），短间隔重试
+    var lastErr;
+    for (var tries = 0; tries < 5; tries++) {
+      try {
+        capCtx.drawImage(el.video, rect.x, rect.y, rect.s, rect.s, 0, 0, out, out);
+        lastErr = null;
+        break;
+      } catch (e) {
+        lastErr = e;
+        await sleep(120);
+      }
+    }
+    if (lastErr) throw lastErr;
+    var id = capCtx.getImageData(0, 0, out, out);
+    var dst = capCtx.createImageData(out, out);
+    var src = id.data, dd = dst.data;
+    for (var i2 = 0; i2 < src.length; i2 += 4) {
+      var v = src[i2 + chIdx];
+      dd[i2] = v; dd[i2 + 1] = v; dd[i2 + 2] = v; dd[i2 + 3] = 255;
+    }
+    return dst;
+  }
+
+  function makeThumb(plate, chIdx, size) {
+    size = size || 92;
+    var t = document.createElement('canvas');
+    t.width = t.height = size;
+    var tctx = t.getContext('2d');
+    var tmp = document.createElement('canvas');
+    tmp.width = tmp.height = plate.width;
+    tmp.getContext('2d').putImageData(plate, 0, 0);
+    tctx.drawImage(tmp, 0, 0, size, size);
+    var id = tctx.getImageData(0, 0, size, size);
+    var d = id.data;
+    for (var i = 0; i < d.length; i += 4) {
+      var v = d[i];
+      d[i] = chIdx === 0 ? v : 0;
+      d[i + 1] = chIdx === 1 ? v : 0;
+      d[i + 2] = chIdx === 2 ? v : 0;
+    }
+    tctx.putImageData(id, 0, 0);
+    return t;
+  }
+
+  /* ---------------- shooting flow ---------------- */
+  function setPlateState(i, cls) {
+    var p = el.plates[i];
+    p.classList.remove('pending', 'active', 'done');
+    if (cls) p.classList.add(cls);
+  }
+
+  function fillPlate(i, thumb) {
+    $('.pl-img', el.plates[i]).style.backgroundImage = 'url(' + thumb.toDataURL() + ')';
+  }
+
+  function resetPlates() {
+    el.plates.forEach(function (p, i) {
+      setPlateState(i, 'pending');
+      $('.pl-img', p).style.backgroundImage = '';
+    });
+    el.progressFill.style.width = '0%';
+  }
+
+  function setGuide(ch, active) {
+    if (ch) {
+      el.chip.classList.remove('hidden');
+      el.chip.innerHTML = '<i style="background:' + ch.color + '"></i><b style="color:' + ch.color + '">' +
+        ch.letter + '</b><span>' + ch.name + '</span>';
+      el.chip.style.borderColor = ch.color;
+    } else {
+      el.chip.classList.add('hidden');
+    }
+    el.holdMsg.classList.toggle('hidden', !active);
+  }
+
+  /* 弹簧换版圆环倒计时（左下角）：满环 → 空环，rAF 持续平滑更新 */
+  var SPRING_CIRC = 163.4; // 圆环周长 2πr（r=26）
+  var springRAF = 0;
+  var springStartTs = 0;
+  var springDuration = 0;
+
+  function springFrame(ts) {
+    if (!springStartTs) springStartTs = ts;
+    var progress = clamp((ts - springStartTs) / springDuration, 0, 1);
+    el.stFg.style.strokeDashoffset = SPRING_CIRC * progress;
+    if (progress < 1 && !shootAbort) {
+      springRAF = requestAnimationFrame(springFrame);
+    } else {
+      springRAF = 0;
+    }
+  }
+  function showSpringTimer() {
+    el.springTimer.classList.remove('hidden');
+    el.stFg.style.strokeDashoffset = 0;
+    springStartTs = 0;
+    springDuration = springDelay;
+    springRAF = requestAnimationFrame(springFrame);
+  }
+  function hideSpringTimer() {
+    if (springRAF) { cancelAnimationFrame(springRAF); springRAF = 0; }
+    el.springTimer.classList.add('hidden');
+  }
+
+  function startShoot() {
+    if (state !== 'idle') return;
+    state = 'shooting';
+    shootAbort = false;
+    plates = [];
+    resetPlates();
+    hideSpringTimer();
+    el.btnShoot.classList.add('disabled');
+    el.btnCancelShoot.classList.remove('hidden');
+    el.btnHistory.classList.add('disabled');
+    el.btnVintage.classList.add('disabled');
+    el.btnMode.classList.add('disabled');
+    el.intervalRow.classList.add('disabled');
+
+    (async function () {
+      try {
+        for (var i = 0; i < 3; i++) {
+          if (shootAbort) break;
+          var ch = CHANNELS[i];
+          setPlateState(i, 'active');
+          setGuide(ch, true);
+
+          // 曝光：等待视频就绪后捕获该通道（snapToPlate 现在是 async）
+          var plate;
+          try {
+            plate = await snapToPlate(i);
+          } catch (e) {
+            toast('曝光失败：' + (e && e.message ? e.message : '请重试'), 4200);
+            shootAbort = true;
+            break;
+          }
+          var thumb = makeThumb(plate, i);
+          plates.push({ img: plate, thumb: thumb, letter: ch.letter });
+          fillPlate(i, thumb);
+          setPlateState(i, 'done');
+          el.progressFill.style.width = ((i + 1) / 3 * 100) + '%';
+          shutter();
+
+          if (i < 2) {
+            // 弹簧换版：左下角圆环倒计时（rAF 平滑动画）+ 机械音效
+            setGuide(null, false);
+            springTick();
+            if (springDelay > 0) {
+              showSpringTimer();
+              // 分块 await 以便取消时能尽快退出；圆环由 rAF 持续更新
+              var remained = springDelay;
+              while (remained > 0 && !shootAbort) {
+                var chunk = remained > 100 ? 100 : remained;
+                await sleep(chunk);
+                remained -= chunk;
+              }
+              hideSpringTimer();
+            }
+          }
+        }
+      } finally {
+        el.btnShoot.classList.remove('disabled');
+        el.btnCancelShoot.classList.add('hidden');
+        el.btnHistory.classList.remove('disabled');
+        el.btnVintage.classList.remove('disabled');
+        el.btnMode.classList.remove('disabled');
+        el.intervalRow.classList.remove('disabled');
+      }
+
+      if (shootAbort || plates.length < 3) {
+        state = 'idle';
+        resetPlates();
+        setGuide(null, false);
+        hideSpringTimer();
+        if (shootAbort) toast('本次拍摄已取消');
+        return;
+      }
+      state = 'done';
+      finishShoot();
+    })();
+  }
+
+  function abortShoot() {
+    shootAbort = true;
+    if (manualMode && state === 'shooting') {
+      // 手动模式取消：立即恢复界面（无循环等待）
+      manualBusy = false;
+      state = 'idle';
+      resetPlates();
+      setGuide(null, false);
+      hideSpringTimer();
+      el.btnShoot.classList.remove('disabled');
+      el.btnCancelShoot.classList.add('hidden');
+      el.btnHistory.classList.remove('disabled');
+      el.btnVintage.classList.remove('disabled');
+      el.btnMode.classList.remove('disabled');
+      el.intervalRow.classList.remove('disabled');
+      toast('本次拍摄已取消');
+    }
+  }
+
+  /* ---------------- 手动模式：逐次按快门拍摄三个通道 ---------------- */
+  function startManualShoot() {
+    state = 'shooting';
+    shootAbort = false;
+    manualIndex = 0;
+    plates = [];
+    resetPlates();
+    hideSpringTimer();
+    el.btnCancelShoot.classList.remove('hidden');
+    el.btnHistory.classList.add('disabled');
+    el.btnVintage.classList.add('disabled');
+    el.btnMode.classList.add('disabled');
+    el.intervalRow.classList.add('disabled');
+    captureManualChannel();
+  }
+
+  async function captureManualChannel() {
+    if (shootAbort || manualBusy) return;
+    if (manualIndex >= 3) return;
+    manualBusy = true;
+    var i = manualIndex;
+    var ch = CHANNELS[i];
+    setPlateState(i, 'active');
+    setGuide(ch, true);
+
+    var plate;
+    try {
+      plate = await snapToPlate(i);
+    } catch (e) {
+      manualBusy = false;
+      toast('曝光失败：' + (e && e.message ? e.message : '请重试'), 4200);
+      shootAbort = true;
+      finishManual(false);
+      return;
+    }
+    if (shootAbort) { manualBusy = false; return; }
+
+    var thumb = makeThumb(plate, i);
+    plates.push({ img: plate, thumb: thumb, letter: ch.letter });
+    fillPlate(i, thumb);
+    setPlateState(i, 'done');
+    el.progressFill.style.width = ((i + 1) / 3 * 100) + '%';
+    shutter();
+    manualIndex++;
+    manualBusy = false;
+
+    if (manualIndex >= 3) {
+      finishManual(true);
+    } else {
+      setGuide(null, false);
+      toast('已拍摄 ' + ch.name + '，再按快门拍摄 ' + CHANNELS[manualIndex].name);
+    }
+  }
+
+  function finishManual(ok) {
+    el.btnShoot.classList.remove('disabled');
+    el.btnCancelShoot.classList.add('hidden');
+    el.btnHistory.classList.remove('disabled');
+    el.btnVintage.classList.remove('disabled');
+    el.btnMode.classList.remove('disabled');
+    el.intervalRow.classList.remove('disabled');
+    if (!ok) {
+      state = 'idle';
+      resetPlates();
+      setGuide(null, false);
+      hideSpringTimer();
+      return;
+    }
+    state = 'done';
+    finishShoot();
+  }
+
+  /* ---------------- 自动 / 手动模式切换 ---------------- */
+  function toggleMode() {
+    if (state !== 'idle') return; // 拍摄中不允许切换
+    manualMode = !manualMode;
+    el.btnMode.classList.toggle('on', manualMode);
+    el.btnMode.setAttribute('aria-pressed', String(manualMode));
+    el.btnMode.textContent = manualMode ? '手动' : '自动';
+    // 手动模式无需间隔，禁用滑轨
+    el.intervalRow.classList.toggle('disabled', manualMode);
+    toast(manualMode ? '手动模式：每按一次快门拍一个通道' : '自动模式：自动按间隔连拍三通道');
+  }
+
+  /* ---------------- compositing ---------------- */
+  function compose(arr) {
+    var size = arr[0].img.width;
+    var c = document.createElement('canvas');
+    c.width = c.height = size;
+    var cx = c.getContext('2d');
+    var out = cx.createImageData(size, size);
+    var dr = arr[0].img.data, dg = arr[1].img.data, db = arr[2].img.data;
+    var dd = out.data;
+    for (var i = 0; i < dd.length; i += 4) {
+      dd[i] = dr[i];
+      dd[i + 1] = dg[i + 1];
+      dd[i + 2] = db[i + 2];
+      dd[i + 3] = 255;
+    }
+    cx.putImageData(out, 0, 0);
+    return c;
+  }
+
+  function copyCanvas(c) {
+    var n = document.createElement('canvas');
+    n.width = c.width; n.height = c.height;
+    n.getContext('2d').drawImage(c, 0, 0);
+    return n;
+  }
+
+  /* 复古处理：暖色分离色调 + 褪黑 + 暗角 + 颗粒，贴近早期干板照片 */
+  function vintageFilter(c) {
+    var ctx = c.getContext('2d');
+    var w = c.width, h = c.height;
+    var img = ctx.getImageData(0, 0, w, h);
+    var d = img.data;
+    var cxx = w / 2, cyy = h / 2, maxR = Math.hypot(cxx, cyy);
+
+    for (var i = 0; i < d.length; i += 4) {
+      var r = d[i], g = d[i + 1], b = d[i + 2];
+      var sr = r * 0.393 + g * 0.769 + b * 0.189;
+      var sg = r * 0.349 + g * 0.686 + b * 0.168;
+      var sb = r * 0.272 + g * 0.534 + b * 0.131;
+      r = sr * 0.55 + r * 0.45;
+      g = sg * 0.55 + g * 0.45;
+      b = sb * 0.55 + b * 0.45;
+      r = r * 1.05 + 10;
+      g = g * 1.01 + 8;
+      b = b * 0.93 + 13;
+      var lum = r * 0.299 + g * 0.587 + b * 0.114;
+      r = r * 0.92 + lum * 0.08;
+      g = g * 0.92 + lum * 0.08;
+      b = b * 0.92 + lum * 0.08;
+      d[i] = clamp(r, 0, 255);
+      d[i + 1] = clamp(g, 0, 255);
+      d[i + 2] = clamp(b, 0, 255);
+    }
+
+    for (var y = 0; y < h; y++) {
+      for (var x = 0; x < w; x++) {
+        var p = (y * w + x) * 4;
+        var dist = Math.hypot(x - cxx, y - cyy) / maxR;
+        var vig = 1 - 0.2 * dist * dist;
+        var gr = (Math.random() * 2 - 1) * 8;
+        d[p] = clamp(d[p] * vig + gr, 0, 255);
+        d[p + 1] = clamp(d[p + 1] * vig + gr, 0, 255);
+        d[p + 2] = clamp(d[p + 2] * vig + gr, 0, 255);
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+    return c;
+  }
+
+  function canvasToBlob(c) {
+    return new Promise(function (res) { c.toBlob(function (b) { res(b); }, 'image/jpeg', 0.92); });
+  }
+
+  /* ---------------- result ---------------- */
+  function finishShoot() {
+    stopCamera();
+    rawCanvas = compose(plates);
+    finalCanvas = vintageOn ? vintageFilter(copyCanvas(rawCanvas)) : copyCanvas(rawCanvas);
+    renderResult();
+
+    el.plateStrip.innerHTML = '';
+    plates.forEach(function (p) {
+      var it = document.createElement('div');
+      it.className = 'pstrip-item';
+      it.innerHTML = '<img src="' + p.thumb.toDataURL() + '"><span>' + p.letter + '</span>';
+      el.plateStrip.appendChild(it);
+    });
+
+    // 自动存入历史（相册式）
+    canvasToBlob(finalCanvas).then(function (blob) {
+      return dbAdd({ blob: blob, vintage: vintageOn, ts: Date.now() });
+    }).then(function () {
+      toast('照片已存入「历史」');
+    }).catch(function (e) { console.warn(e); });
+
+    showScreen('result');
+  }
+
+  function renderResult() {
+    var c = vintageOn ? finalCanvas : rawCanvas;
+    el.resultImg.src = c.toDataURL('image/jpeg', 0.92);
+    syncVintageBtns();
+  }
+
+  function syncVintageBtns() {
+    el.btnVintage.classList.toggle('on', vintageOn);
+    el.btnVintage2.classList.toggle('on', vintageOn);
+  }
+
+  function toggleVintage() {
+    if (state === 'shooting') return;
+    vintageOn = !vintageOn;
+    if (state === 'done') renderResult();
+    else syncVintageBtns();
+  }
+
+  /* ---------------- save / share ---------------- */
+  function savePhoto(blob, filename) {
+    filename = filename || ('3color_' + Date.now());
+    var file = new File([blob], filename + '.jpg', { type: 'image/jpeg' });
+    // 1) 系统分享/存储（Android Chrome、iOS Safari 15+）
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      return navigator.share({
+        files: [file],
+        title: '3color 三色相片',
+        text: '由三色摄影法拍摄的复古彩色照片'
+      }).then(function () {
+        toast('已保存到相册');
+        return true;
+      }).catch(function (e) {
+        if (e && e.name === 'AbortError') return true;
+        return fallbackSave(blob, filename);
+      });
+    }
+    return fallbackSave(blob, filename);
+  }
+
+  function fallbackSave(blob, filename) {
+    var url = URL.createObjectURL(blob);
+    if (isIOS) {
+      var w = window.open(url, '_blank');
+      if (!w) {
+        var a = document.createElement('a');
+        a.href = url; a.target = '_blank';
+        document.body.appendChild(a); a.click(); a.remove();
+      }
+      toast('已打开图片，请长按保存到相册');
+    } else {
+      var a = document.createElement('a');
+      a.href = url; a.download = filename + '.jpg';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(function () { URL.revokeObjectURL(url); }, 30000);
+      toast('已保存');
+    }
+    return Promise.resolve(true);
+  }
+
+  function onSave() {
+    var c = vintageOn ? finalCanvas : rawCanvas;
+    canvasToBlob(c).then(function (blob) { return savePhoto(blob); });
+  }
+
+  /* ---------------- IndexedDB history ---------------- */
+  function dbOpen() {
+    return new Promise(function (res, rej) {
+      var req = indexedDB.open(DB_NAME, DB_VER);
+      req.onupgradeneeded = function () {
+        var db = req.result;
+        if (!db.objectStoreNames.contains(STORE)) {
+          db.createObjectStore(STORE, { keyPath: 'id', autoIncrement: true });
+        }
+      };
+      req.onsuccess = function () { res(req.result); };
+      req.onerror = function () { rej(req.error); };
+    });
+  }
+  function dbAdd(item) {
+    return dbOpen().then(function (db) {
+      return new Promise(function (res, rej) {
+        var tx = db.transaction(STORE, 'readwrite');
+        tx.objectStore(STORE).add(item);
+        tx.oncomplete = function () { res(); };
+        tx.onerror = function () { rej(tx.error); };
+      });
+    });
+  }
+  function dbAll() {
+    return dbOpen().then(function (db) {
+      return new Promise(function (res, rej) {
+        var tx = db.transaction(STORE, 'readonly');
+        var req = tx.objectStore(STORE).getAll();
+        req.onsuccess = function () { res(req.result || []); };
+        req.onerror = function () { rej(req.error); };
+      });
+    });
+  }
+  function dbDel(id) {
+    return dbOpen().then(function (db) {
+      return new Promise(function (res, rej) {
+        var tx = db.transaction(STORE, 'readwrite');
+        tx.objectStore(STORE).delete(id);
+        tx.oncomplete = function () { res(); };
+        tx.onerror = function () { rej(tx.error); };
+      });
+    });
+  }
+
+  /* ---------------- history UI ---------------- */
+  var historyUrls = {};
+  function openHistory() {
+    el.historyModal.classList.remove('hidden');
+    renderHistory();
+  }
+  function closeHistory() { el.historyModal.classList.add('hidden'); }
+
+  function renderHistory() {
+    el.historyGrid.innerHTML = '';
+    dbAll().then(function (items) {
+      items.sort(function (a, b) { return b.ts - a.ts; });
+      Object.keys(historyUrls).forEach(function (k) { URL.revokeObjectURL(historyUrls[k]); });
+      historyUrls = {};
+      if (!items.length) {
+        el.historyGrid.innerHTML = '<p class="empty">还没有照片，去拍一张吧</p>';
+        return;
+      }
+      items.forEach(function (it) {
+        var url = URL.createObjectURL(it.blob);
+        historyUrls[it.id] = url;
+        var c = document.createElement('button');
+        c.className = 'hist-item';
+        c.innerHTML = '<img src="' + url + '" alt="照片">';
+        c.addEventListener('click', function () { openDetail(it); });
+        el.historyGrid.appendChild(c);
+      });
+    }).catch(function () {
+      el.historyGrid.innerHTML = '<p class="empty">读取历史失败</p>';
+    });
+  }
+
+  var detailId = null, detailUrl = null;
+  function openDetail(it) {
+    detailId = it.id;
+    detailUrl = URL.createObjectURL(it.blob);
+    el.detailImg.src = detailUrl;
+    el.detailVintage.textContent = it.vintage ? '复古色调' : '原色合成';
+    el.detailTime.textContent = new Date(it.ts).toLocaleString('zh-CN');
+    el.detailModal.classList.remove('hidden');
+  }
+  function closeDetail() {
+    if (detailUrl) { URL.revokeObjectURL(detailUrl); detailUrl = null; }
+    detailId = null;
+    el.detailModal.classList.add('hidden');
+  }
+
+  function onDetailSave() {
+    if (!detailId) return;
+    dbAll().then(function (items) {
+      for (var i = 0; i < items.length; i++) {
+        if (items[i].id === detailId) {
+          savePhoto(items[i].blob);
+          return;
+        }
+      }
+    });
+  }
+
+  var deleteArmed = false, deleteTimer = null;
+  function onDetailDelete() {
+    var btn = $('#btn-detail-delete');
+    if (!deleteArmed) {
+      deleteArmed = true;
+      btn.classList.add('danger');
+      btn.textContent = '确认删除？';
+      clearTimeout(deleteTimer);
+      deleteTimer = setTimeout(function () {
+        deleteArmed = false;
+        btn.classList.remove('danger');
+        btn.textContent = '删除';
+      }, 3000);
+      return;
+    }
+    clearTimeout(deleteTimer);
+    deleteArmed = false;
+    btn.classList.remove('danger');
+    btn.textContent = '删除';
+    var id = detailId;
+    dbDel(id).then(function () {
+      closeDetail();
+      renderHistory();
+      toast('已删除');
+    });
+  }
+
+  /* ---------------- retake ---------------- */
+  function goCamera() {
+    stopCamera();
+    state = 'idle';
+    plates = [];
+    rawCanvas = finalCanvas = null;
+    resetPlates();
+    setGuide(null, false);
+    hideSpringTimer();
+    showScreen('camera');
+    updateSliderUI();
+    acquireAndPlay().catch(function (e) {
+      toast(cameraErrorMessage(e), 3600);
+    });
+  }
+
+  /* ---------------- wiring ---------------- */
+  el.btnStart.addEventListener('click', function () {
+    el.btnStart.disabled = true;
+    el.btnStart.textContent = '启动相机…';
+    showScreen('camera');
+    updateSliderUI();
+    acquireAndPlay().then(function () {
+      el.btnStart.disabled = false;
+      el.btnStart.textContent = '开始拍摄';
+    }).catch(function (e) {
+      showScreen('intro');
+      el.btnStart.disabled = false;
+      el.btnStart.textContent = '重试';
+      toast(cameraErrorMessage(e), 4200);
+    });
+  });
+
+  el.btnShoot.addEventListener('click', function () {
+    if (state === 'shooting') {
+      // 手动模式下连续按快门拍摄后续通道
+      if (manualMode) captureManualChannel();
+      return;
+    }
+    if (state !== 'idle') return;
+    if (manualMode) startManualShoot();
+    else startShoot();
+  });
+  el.btnMode.addEventListener('click', toggleMode);
+  el.btnCancelShoot.addEventListener('click', abortShoot);
+  el.btnHistory.addEventListener('click', openHistory);
+  el.btnVintage.addEventListener('click', toggleVintage);
+  el.btnVintage2.addEventListener('click', toggleVintage);
+  el.btnRetake.addEventListener('click', goCamera);
+  el.btnSave.addEventListener('click', onSave);
+
+  /* ---------------- 换版间隔滑轨 ---------------- */
+  var SLIDER_PAD = 26; // 轨道左右留白（px），保证滑块两端不溢出
+  var SLIDER_STEP = 0.5;
+
+  function formatSec(v) {
+    // 整数显示「3s」，半秒显示「3.5s」；末尾小数 0 时省略
+    var n = Math.round(v * 10) / 10;
+    return (Math.round(n) === n ? n.toFixed(0) : n.toFixed(1)) + 's';
+  }
+
+  // 根据当前 springDelay 同步滑块视觉（填充条 + 滑块位置 + 按钮秒数 + aria）
+  function updateSliderUI() {
+    var track = el.intervalTrack;
+    if (!track || !track.clientWidth) return;
+    var v = clamp(springDelay / 1000, INTERVAL_MIN, INTERVAL_MAX);
+    var rail = track.clientWidth - SLIDER_PAD * 2;
+    var pos = SLIDER_PAD + rail * (v / INTERVAL_MAX);
+    el.sliderFill.style.width = pos + 'px';
+    el.sliderThumb.style.left = pos + 'px';
+    el.thumbVal.textContent = formatSec(v);
+    track.setAttribute('aria-valuenow', formatSec(v).replace('s', ''));
+    track.setAttribute('aria-valuetext', formatSec(v) + '（秒）');
+  }
+
+  function setSpringDelay(sec, opts) {
+    springDelay = Math.round(sec * 1000);
+    try { localStorage.setItem('3color-interval', String(sec)); } catch (e) {}
+    updateSliderUI();
+  }
+
+  function valueFromClientX(clientX) {
+    var rect = el.intervalTrack.getBoundingClientRect();
+    var rail = rect.width - SLIDER_PAD * 2;
+    var x = clientX - rect.left - SLIDER_PAD;
+    var v = (x / rail) * INTERVAL_MAX;
+    v = Math.round(v / SLIDER_STEP) * SLIDER_STEP;
+    return clamp(v, INTERVAL_MIN, INTERVAL_MAX);
+  }
+
+  (function initInterval() {
+    // 恢复上次选择；无记录或越界时默认 3 秒
+    var saved = null;
+    try {
+      var raw = localStorage.getItem('3color-interval');
+      if (raw !== null && raw !== '') saved = parseFloat(raw);
+    } catch (e) {}
+    if (saved === null || isNaN(saved) || saved < INTERVAL_MIN || saved > INTERVAL_MAX) {
+      saved = DEFAULT_INTERVAL;
+    }
+    setSpringDelay(saved);
+
+    // 拖动 + 点击轨道（Pointer Events 统一触摸与鼠标）
+    var pointerId = null;
+    function onDown(e) {
+      e.preventDefault();
+      pointerId = e.pointerId;
+      try { el.intervalTrack.setPointerCapture(pointerId); } catch (err) {}
+      setSpringDelay(valueFromClientX(e.clientX));
+    }
+    function onMove(e) {
+      if (pointerId === null || e.pointerId !== pointerId) return;
+      setSpringDelay(valueFromClientX(e.clientX));
+    }
+    function onUp(e) {
+      if (pointerId === null || e.pointerId !== pointerId) return;
+      try { el.intervalTrack.releasePointerCapture(pointerId); } catch (err) {}
+      pointerId = null;
+    }
+    el.intervalTrack.addEventListener('pointerdown', onDown);
+    el.intervalTrack.addEventListener('pointermove', onMove);
+    el.intervalTrack.addEventListener('pointerup', onUp);
+    el.intervalTrack.addEventListener('pointercancel', onUp);
+
+    // 键盘：← → 调节 0.5s，Home/End 跳到端点
+    el.intervalTrack.addEventListener('keydown', function (e) {
+      var cur = springDelay / 1000;
+      var step = SLIDER_STEP;
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') {
+        setSpringDelay(cur - step);
+        e.preventDefault();
+      } else if (e.key === 'ArrowRight' || e.key === 'ArrowUp') {
+        setSpringDelay(cur + step);
+        e.preventDefault();
+      } else if (e.key === 'Home') {
+        setSpringDelay(INTERVAL_MIN);
+        e.preventDefault();
+      } else if (e.key === 'End') {
+        setSpringDelay(INTERVAL_MAX);
+        e.preventDefault();
+      }
+    });
+
+    window.addEventListener('resize', updateSliderUI);
+  })();
+
+  $('#btn-history-close').addEventListener('click', closeHistory);
+  el.historyModal.addEventListener('click', function (e) { if (e.target === el.historyModal) closeHistory(); });
+  $('#btn-detail-close').addEventListener('click', closeDetail);
+  $('#btn-detail-save').addEventListener('click', onDetailSave);
+  $('#btn-detail-delete').addEventListener('click', onDetailDelete);
+  el.detailModal.addEventListener('click', function (e) { if (e.target === el.detailModal) closeDetail(); });
+
+  // 切后台时中止拍摄 / 释放相机；回前台恢复
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) {
+      if (state === 'shooting') { abortShoot(); }
+      else if (state === 'idle' && !el.screens.camera.classList.contains('hidden')) { stopCamera(); }
+    } else {
+      if (state === 'idle' && !el.screens.camera.classList.contains('hidden') && !stream) {
+        acquireAndPlay().catch(function () {});
+      }
+    }
+  });
+
+  // 安装 PWA
+  window.addEventListener('beforeinstallprompt', function (e) {
+    e.preventDefault();
+    deferredPrompt = e;
+    el.installBtn.classList.remove('hidden');
+  });
+  el.installBtn.addEventListener('click', function () {
+    if (!deferredPrompt) return;
+    deferredPrompt.prompt();
+    deferredPrompt.userChoice.then(function (choice) {
+      if (choice && choice.outcome === 'accepted') toast('已安装');
+      deferredPrompt = null;
+      el.installBtn.classList.add('hidden');
+    });
+  });
+
+  // 注册 Service Worker（离线支持 + 离线更新）
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', function () {
+      navigator.serviceWorker.register('sw.js').then(function (reg) {
+        // 如果新 SW 正在等待，立刻接管
+        if (reg.waiting) {
+          reg.waiting.postMessage({ type: 'SKIP_WAITING' });
+        }
+        reg.addEventListener('updatefound', function () {
+          var sw = reg.installing;
+          if (!sw) return;
+          sw.addEventListener('statechange', function () {
+            if (sw.state === 'installed' && navigator.serviceWorker.controller) {
+              // 新版本已安装并接管，立即刷新页面拿新版
+              sw.postMessage({ type: 'SKIP_WAITING' });
+            }
+          });
+        });
+      }).catch(function (e) {
+        console.warn('SW 注册失败', e);
+      });
+
+      // 新 SW 接管后刷新一次页面（确保拿到最新资源）
+      var refreshing = false;
+      navigator.serviceWorker.addEventListener('controllerchange', function () {
+        if (refreshing) return;
+        refreshing = true;
+        window.location.reload();
+      });
+    });
+  }
+
+  // 非安全上下文提示
+  if (!window.isSecureContext && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
+    toast('相机需要 HTTPS 环境', 5000);
+  }
+})();

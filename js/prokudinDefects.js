@@ -53,10 +53,11 @@
       stainStrength: 0.05,   /* 峰值不透明度（≤0.08） */
       stainCells: 3,         /* 短边上的基频格数（尺度≈1/3~1/9 短边） */
       stainEdgeBias: 0.70,   /* 边缘/四角权重增量（0=全图均匀） */
-      /* 彩色斑点（通道不相关）——对齐 LOC 修复版密度：spotting 后残余极少 */
-      speckDensity: 22,      /* 每 1500×1000 面积的斑点数（按面积缩放，±30% 随机） */
+      /* 彩色斑点（通道不相关）——成色对齐三色工艺物理：
+         1 块板缺陷→互补色斑（青/品红/黄），2 块板→原色斑，3 块板→中性灰 */
+      speckDensity: 30,      /* 每 1500×1000 面积的斑点数（按面积缩放，±30% 随机） */
       speckSoftRatio: 0.50,  /* 柔边（离焦）斑点比例 */
-      speckBrightRatio: 0.35,/* 亮斑比例（其余为暗斑） */
+      speckBoostRatio: 0.25, /* 变亮斑比例（曝光阻挡型；其余为密度缺陷变暗型） */
       speckMinR: 0.0009,     /* 半径下限（短边比例） */
       speckMaxR: 0.0045,     /* 半径上限（短边比例，对数分布） */
       /* 玻璃划痕（干板单张搬运 → 方向随机、多为短划；修复版残余 1~3 条淡划痕） */
@@ -168,11 +169,22 @@
     var aspect = 0.5 + rng() * 0.5;
     var rot = rng() * Math.PI;
     var soft = rng() < P.speckSoftRatio;
-    var bright = rng() < P.speckBrightRatio;
-    /* 逐通道独立：α 系数（0~1，部分通道近 0 → 呈现互补色）与目标值 */
-    var cA = [Math.pow(rng(), 0.6), Math.pow(rng(), 0.6), Math.pow(rng(), 0.6)];
-    var target = bright ? 1 : 0;
-    var strength = 0.20 + rng() * 0.30;                  /* 单斑峰值不透明度（克制） */
+    /* 三色工艺物理成色：缺陷作用于 1~3 张干板
+       - 1 块板（55%）：该通道减弱 → 互补色斑（R 板损→青 / G 板损→品红 / B 板损→黄）
+       - 2 块板（30%）：→ 原色斑（仅剩通道的颜色：红/绿/蓝）
+       - 3 块板（15%）：→ 中性灰斑
+       类型：密度缺陷变暗（银粒/划伤，75%）；曝光阻挡变亮（拍摄时灰尘，25%） */
+    var pr = rng();
+    var nPlates = pr < 0.55 ? 1 : (pr < 0.85 ? 2 : 3);
+    var plates = [0, 1, 2];
+    var pi;
+    for (pi = 2; pi > 0; pi--) {               /* Fisher-Yates 洗牌取前 nPlates 块 */
+      var pj = (rng() * (pi + 1)) | 0;
+      var tmp = plates[pi]; plates[pi] = plates[pj]; plates[pj] = tmp;
+    }
+    plates = plates.slice(0, nPlates);
+    var boost = rng() < P.speckBoostRatio;
+    var strength = 0.22 + rng() * 0.33;                  /* 单斑峰值强度（克制） */
     /* 不规则轮廓：8 个角度控制点的半径扰动（0.65~1.35），线性插值 */
     var NCTRL = 8;
     var ctrl = new Float32Array(NCTRL + 1);
@@ -205,10 +217,12 @@
           prof = e < 0.8 ? 1 : (1 - (e - 0.8) / 0.2);     /* 硬边+窄过渡 */
         }
         p = (y * w + x) * 3;
-        for (c = 0; c < 3; c++) {
-          var a = prof * strength * cA[c];
-          if (a <= 0.003) continue;
-          rgb[p + c] = rgb[p + c] * (1 - a) + target * a;
+        var a = prof * strength;
+        if (a <= 0.003) continue;
+        for (var k = 0; k < plates.length; k++) {
+          c = plates[k];
+          if (boost) rgb[p + c] = rgb[p + c] + a * (1 - rgb[p + c]);  /* 曝光阻挡：通道变亮 */
+          else rgb[p + c] = rgb[p + c] * (1 - a);                     /* 密度缺陷：通道变暗 */
         }
       }
     }
@@ -285,10 +299,12 @@
   function applyEdgeColorBands(rgb, w, h, P, rng) {
     if (rng() > P.bandProb) return;
     var palette = [
-      [0.94, 1.06, 0.94],   /* 绿带（G 板多露） */
-      [0.93, 1.00, 1.07],   /* 青带（B 板多露） */
-      [1.07, 0.93, 1.02],   /* 品红带（R/B 多露） */
-      [1.05, 0.99, 0.92]    /* 暖带 */
+      [0.94, 1.06, 0.94],   /* 绿带：R+B 板短 → 仅剩 G */
+      [0.92, 1.02, 1.08],   /* 青带：R 板短 → 仅剩 G+B */
+      [1.07, 0.92, 1.04],   /* 品红带：G 板短 → 仅剩 R+B */
+      [1.06, 1.04, 0.90],   /* 黄带：B 板短 → 仅剩 R+G */
+      [1.08, 0.93, 0.93],   /* 红带：G+B 板短 → 仅剩 R */
+      [0.93, 0.95, 1.08]    /* 蓝带：R+G 板短 → 仅剩 B */
     ];
     var edges = [0, 1, 2, 3]; /* 0 顶 1 底 2 左 3 右 */
     var nBands = rng() < 0.35 ? 2 : 1;

@@ -553,9 +553,10 @@
       GelatinPlate.GelatinPlateParams({
         orthoBlend: 0.65,
         haloStrength: 0.30,
-        grainStrength: 0.045,
+        grainStrength: 0.032,
         grainSizeDiv: 3,
-        grainFine: 0.012,
+        grainFine: 0.020,
+        grainMaskFloor: 0.45,  /* 亮/暗端保留 45% 颗粒，匹配真实干板 */
         curveK: 6.0,
         vignetteK1: 0.20, vignetteK2: 0.03
       }),

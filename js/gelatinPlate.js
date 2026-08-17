@@ -57,13 +57,13 @@
       haloBlurRuns: 3,       /* 低分辨率盒式模糊遍数（≈高斯 sigma） */
       haloDownsample: 4,     /* 模糊降采样比例（性能+大半径） */
       /* 银盐颗粒 */
-      grainStrength: 0.045,  /* 中间调峰值幅度（[0,1] 域） */
+      grainStrength: 0.032,  /* 中间调峰值幅度（[0,1] 域） */
       grainSizeDiv: 3,       /* 成团场除数（越小团块越大） */
-      grainFine: 0.012,      /* 全分辨率细颗粒幅度 */
-      grainLumaExp: 1.0,     /* 蒙版幂次（>1 更压暗部高光） */
+      grainFine: 0.020,      /* 全分辨率细颗粒幅度（更细更密） */
+      grainLumaExp: 1.0,     /* 蒙版幂次 */
+      grainMaskFloor: 0.45,  /* 颗粒亮度蒙版地板（亮/暗端保留比例，对齐真实干板） */
       /* S 曲线反差 */
       curveK: 6.0,           /* sigmoid 陡度（温和，k=6） */
-      /* 暗角（干板边缘光衰，克制） */
       vignetteK1: 0.20,
       vignetteK2: 0.03
     };
@@ -221,9 +221,15 @@
         var screen = 1 - (1 - l) * (1 - hlUp * P.haloStrength);
         var scale = screen / (l + 1e-6);
 
-        /* b. 颗粒：中间调抛物线蒙版 4·pl·(1-pl) */
-        var mid = 4 * pl * (1 - pl);
-        if (P.grainLumaExp !== 1) mid = Math.pow(mid, P.grainLumaExp);
+        /* b. 颗粒：带地板的中间调蒙版 floor + (1-floor)·4·pl·(1-pl)
+           —— 真实干板在所有亮度区间都有颗粒（参考真实历史照片），但中间调稍强。
+           floor=0.45 表示暗/亮端保留 45% 强度，中间调峰值 100%。 */
+        var parabola = 4 * pl * (1 - pl);
+        var mid = P.grainMaskFloor + (1 - P.grainMaskFloor) * parabola;
+        if (P.grainLumaExp !== 1) {
+          // 对剩余部分施加幂次（保留地板的 1.0 比例不变）
+          mid = P.grainMaskFloor + (1 - P.grainMaskFloor) * Math.pow(parabola, P.grainLumaExp);
+        }
         var clumped = sampleField(grainF, w, h, x + 0.5, y + 0.5);
         var fine = hashNoise(x, y, sd);
         var gDelta = (clumped * P.grainStrength + fine * P.grainFine) * mid;

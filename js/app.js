@@ -519,55 +519,54 @@
     var w = c.width, h = c.height;
     var img = ctx.getImageData(0, 0, w, h);
     var d = img.data;
-    var cx = w / 2, cy = h / 2, maxR = Math.hypot(cx, cy);
+    var n = w * h;
 
-    // 白平衡（暖偏移 + 压蓝）：模拟早期乳剂蓝光响应弱与玻璃底片老化偏黄
+    /* 1) 转为浮点 */
+    var rgb = new Float32Array(n * 3);
+    var i, p;
+    for (i = 0, p = 0; i < n; i++, p += 4) {
+      rgb[i * 3]     = d[p] / 255;
+      rgb[i * 3 + 1] = d[p + 1] / 255;
+      rgb[i * 3 + 2] = d[p + 2] / 255;
+    }
+
+    /* 2) Prokudin-Gorskii 色彩基调（保留全彩色相，仅温和老化） */
     var Rb = 1.07, Gb = 1.00, Bb = 0.90;
-    var sat = 0.82;      // 饱和度收敛到原值的 82%（褪色感，但保留色彩）
-    var contrast = 0.94; // 轻微降低对比
-    var lift = 0.03;     // 抬升黑位，营造灰雾/老化
-    var warm = 0.05;     // 分离色调强度：高光偏暖、暗部偏冷
-
-    for (var i = 0; i < d.length; i += 4) {
-      var r = d[i] / 255, g = d[i + 1] / 255, b = d[i + 2] / 255;
-
-      // A. 白平衡：暖偏移 + 压蓝
-      r *= Rb; g *= Gb; b *= Bb;
-
-      // B. 降低饱和度（向亮度混合），保留色相 —— 不做棕褐单色
+    var sat = 0.82, contrast = 0.94, lift = 0.03, warm = 0.05;
+    for (i = 0; i < n; i++) {
+      var r = rgb[i * 3] * Rb, g = rgb[i * 3 + 1] * Gb, b = rgb[i * 3 + 2] * Bb;
       var lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
       r = lum + (r - lum) * sat;
       g = lum + (g - lum) * sat;
       b = lum + (b - lum) * sat;
-
-      // C. 对比 + 灰雾（抬黑）：柔和过渡，模拟老化乳剂
       r = (r - 0.5) * contrast + 0.5 + lift;
       g = (g - 0.5) * contrast + 0.5 + lift;
       b = (b - 0.5) * contrast + 0.5 + lift;
-
-      // D. 分离色调：高光暖(琥珀)、暗部冷(青)，强化三色干板的色彩性格
-      var t = (r + g + b) / 3;
-      var st = (t - 0.5) * warm;
-      r += st * 1.1;
-      g += st * 0.4;
-      b -= st * 0.9;
-
-      d[i]     = clamp(r * 255, 0, 255);
-      d[i + 1] = clamp(g * 255, 0, 255);
-      d[i + 2] = clamp(b * 255, 0, 255);
+      var t = (r + g + b) / 3, st = (t - 0.5) * warm;
+      r += st * 1.1; g += st * 0.4; b -= st * 0.9;
+      rgb[i * 3] = r; rgb[i * 3 + 1] = g; rgb[i * 3 + 2] = b;
     }
 
-    for (var y = 0; y < h; y++) {
-      for (var x = 0; x < w; x++) {
-        var p = (y * w + x) * 4;
-        var dist = Math.hypot(x - cx, y - cy) / maxR;
-        var vig = 1 - 0.16 * dist * dist;          // 柔和暗角
-        var gr = (Math.random() * 2 - 1) * 7;      // 克制颗粒（约 ±7）
-        var grc = (Math.random() * 2 - 1) * 3;     // 轻微彩色噪点
-        d[p]     = clamp(d[p] * vig + gr + grc, 0, 255);
-        d[p + 1] = clamp(d[p + 1] * vig + gr, 0, 255);
-        d[p + 2] = clamp(d[p + 2] * vig + gr - grc, 0, 255);
-      }
+    /* 3) 明胶干板质感层（正色片感光 / 玻璃光晕 / 亮度自适应银盐颗粒 / S曲线 / 暗角） */
+    GelatinPlate.applyGelatinPlate(
+      rgb, w, h,
+      GelatinPlate.GelatinPlateParams({
+        orthoBlend: 0.65,
+        haloStrength: 0.30,
+        grainStrength: 0.045,
+        grainSizeDiv: 3,
+        grainFine: 0.012,
+        curveK: 6.0,
+        vignetteK1: 0.20, vignetteK2: 0.03
+      }),
+      0 /* seed=0 → 每张照片颗粒分布随机 */
+    );
+
+    /* 4) 写回 */
+    for (i = 0, p = 0; i < n; i++, p += 4) {
+      d[p]     = clamp(rgb[i * 3] * 255, 0, 255);
+      d[p + 1] = clamp(rgb[i * 3 + 1] * 255, 0, 255);
+      d[p + 2] = clamp(rgb[i * 3 + 2] * 255, 0, 255);
     }
     ctx.putImageData(img, 0, 0);
     return c;

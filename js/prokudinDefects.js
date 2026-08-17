@@ -9,12 +9,17 @@
  *    α 与目标色按 RGB 通道**独立采样** → 通道不相关即呈彩色；
  *    斑点尺寸对数分布，半数加柔边模拟离焦（Kokaram blotch 模型：
  *    空间均匀随机、尺寸有界、强度趋于局部极值）。
- *  - 玻璃板划痕：Kokaram 线划痕模型 —— 近垂直长划痕、横截面余弦剖面、
- *    低频抖动路径；每条划痕随机存在于部分通道（物理上各干板独立划伤），
- *    错位合成后边缘自然带彩色。
+ *  - 玻璃板划痕：Kokaram 线划痕模型余弦剖面 + 低频抖动路径；干板为单张
+ *    搬运 → 方向全随机、多为短划（AIC/保护文献）；逐通道随机存在（≥2 通道）。
+ *  - 画框边缘色带：LOC 修复流程文档 —— 三张干板尺寸/裁切不一 + 边缘乳剂
+ *    损伤，全局对齐后边缘残留整块色偏（顶/底/侧边的绿带、青带、品红带）。
  *  - RGB 通道错位：Lensfun 横向色差径向缩放模型 —— G 通道不动，
- *    R/B 通道反向径向缩放，偏移随半径线性增长、中心对齐、四角最大
+ *    R/B 通道反向径向缩放，偏移随半径增长、中心对齐、四角最大
  *    （上限取短边的 0.5% 以内，对齐 Berkeley/CMU 课程实测错位量级）。
+ *
+ * 密度基准：LOC 修复成品经过人工 spotting/retouching，残余缺陷极少 ——
+ * 本模块对齐"修复后成品"观感：斑点二十余颗/1.5Mpx、划痕 1~3 条、
+ * 边缘色带 0~2 条，整体画面保持干净。
  *
  * 设计约束：
  *  - 每类缺陷独立函数 + 独立参数，全部种子可复现（seed=0 时随机）。
@@ -48,18 +53,25 @@
       stainStrength: 0.05,   /* 峰值不透明度（≤0.08） */
       stainCells: 3,         /* 短边上的基频格数（尺度≈1/3~1/9 短边） */
       stainEdgeBias: 0.70,   /* 边缘/四角权重增量（0=全图均匀） */
-      /* 彩色斑点（通道不相关） */
-      speckDensity: 38,      /* 每 1500×1000 面积的斑点数（按面积缩放，±30% 随机） */
+      /* 彩色斑点（通道不相关）——对齐 LOC 修复版密度：spotting 后残余极少 */
+      speckDensity: 22,      /* 每 1500×1000 面积的斑点数（按面积缩放，±30% 随机） */
       speckSoftRatio: 0.50,  /* 柔边（离焦）斑点比例 */
       speckBrightRatio: 0.35,/* 亮斑比例（其余为暗斑） */
       speckMinR: 0.0009,     /* 半径下限（短边比例） */
-      speckMaxR: 0.006,      /* 半径上限（短边比例，对数分布） */
-      /* 玻璃划痕 */
-      scratchMin: 3,         /* 条数下限 */
-      scratchMax: 6,         /* 条数上限 */
-      scratchOpacity: 0.18,  /* 峰值不透明度上限（实际 0.08~该值随机） */
-      scratchBrightRatio: 0.7,/* 白划痕比例 */
+      speckMaxR: 0.0045,     /* 半径上限（短边比例，对数分布） */
+      /* 玻璃划痕（干板单张搬运 → 方向随机、多为短划；修复版残余 1~3 条淡划痕） */
+      scratchMin: 1,         /* 条数下限 */
+      scratchMax: 3,         /* 条数上限 */
+      scratchOpacity: 0.12,  /* 峰值不透明度上限（实际 0.05~该值随机） */
+      scratchBrightRatio: 0.7,/* 白划痕比例（浅划痕伤乳剂呈白线；深划痕露玻璃呈黑线） */
       scratchChanKeep: 0.80, /* 每条划痕出现在某一通道的概率（跨板不完全相关） */
+      scratchLenMin: 0.10,   /* 长度下限（画面对角线比例） */
+      scratchLenMax: 0.45,   /* 长度上限 */
+      /* 画框边缘色带/色块：干板尺寸/覆盖差异 → 某通道在边缘多露一条，
+         LOC 修复成品中顶/底/侧边的整块色偏（绿带、青带、品红带） */
+      bandProb: 0.55,        /* 出现边缘色带的概率 */
+      bandMinW: 0.010,       /* 色带宽度下限（对应边长比例） */
+      bandMaxW: 0.035,       /* 色带宽度上限 */
       /* RGB 通道错位（Lensfun 径向模型） */
       misregCorner: 0.0024,  /* 四角最大偏移（短边比例，≤0.005） */
       misregRandomize: 0.30, /* 每张照片 k 值随机浮动比例 */
@@ -160,7 +172,7 @@
     /* 逐通道独立：α 系数（0~1，部分通道近 0 → 呈现互补色）与目标值 */
     var cA = [Math.pow(rng(), 0.6), Math.pow(rng(), 0.6), Math.pow(rng(), 0.6)];
     var target = bright ? 1 : 0;
-    var strength = 0.25 + rng() * 0.45;                  /* 单斑峰值不透明度 */
+    var strength = 0.20 + rng() * 0.30;                  /* 单斑峰值不透明度（克制） */
     /* 不规则轮廓：8 个角度控制点的半径扰动（0.65~1.35），线性插值 */
     var NCTRL = 8;
     var ctrl = new Float32Array(NCTRL + 1);
@@ -202,43 +214,48 @@
     }
   }
 
-  /* 单条划痕：近垂直 + 低频横向抖动路径，余弦剖面；逐通道随机存在/偏移 */
+  /* 单条划痕：随机方向（干板单张搬运，无走片方向性）+ 短行程 +
+     低幅低频抖动路径，余弦剖面；逐通道随机存在/微偏移 */
   function addScratch(rgb, w, h, rng, P, short) {
-    var xBase = rng() * w;
-    var angle = (rng() - 0.5) * (16 * Math.PI / 180);    /* ±8° */
-    var yStart = rng() < 0.5 ? 0 : Math.floor(rng() * h * 0.3);
-    var yEnd = (rng() < 0.6 ? h : yStart + Math.floor(h * (0.3 + rng() * 0.5)));
-    if (yEnd > h) yEnd = h;
+    var diag = Math.hypot(w, h);
+    var len = diag * (P.scratchLenMin + rng() * (P.scratchLenMax - P.scratchLenMin));
+    var ang = rng() * Math.PI;                            /* 全随机方向 */
+    var dirX = Math.cos(ang), dirY = Math.sin(ang);
+    var perX = -dirY, perY = dirX;                        /* 垂直方向 */
+    /* 起点：画面中部 70% 区域内随机 */
+    var sx = w * (0.15 + rng() * 0.7), sy = h * (0.15 + rng() * 0.7);
     var halfW = Math.max(0.7, (short / 1500) * (0.8 + rng() * 1.4)); /* 1~3px @1500 */
-    var opacity = 0.08 + rng() * (P.scratchOpacity - 0.08);
+    var opacity = 0.05 + rng() * (P.scratchOpacity - 0.05);
     var target = rng() < P.scratchBrightRatio ? 1 : 0;
-    /* 低频 1D 抖动表（步长 32px，线性插值） */
-    var jitStep = 32, jitN = Math.ceil((yEnd - yStart) / jitStep) + 2;
+    /* 低频 1D 抖动表（垂直于走向，幅度小 —— 避免"玻璃裂纹"观感） */
+    var jitStep = 32, jitN = Math.ceil(len / jitStep) + 2;
     var jit = new Float32Array(jitN);
     var ji;
-    for (ji = 0; ji < jitN; ji++) jit[ji] = (rng() * 2 - 1) * 5 * (short / 1500 + 0.5);
-    /* 逐通道：是否保留 + 微偏移（物理上各干板独立划伤 → 错位后呈彩边）。
+    for (ji = 0; ji < jitN; ji++) jit[ji] = (rng() * 2 - 1) * 2.0;
+    /* 逐通道：是否保留 + 微偏移（各干板独立划伤 → 合成后略呈彩线）。
        至少保留 2 个通道 —— 单通道划痕是纯饱和色线，观感假 */
     var chanOn = [rng() < P.scratchChanKeep, rng() < P.scratchChanKeep, rng() < P.scratchChanKeep];
     var onCount = (chanOn[0] ? 1 : 0) + (chanOn[1] ? 1 : 0) + (chanOn[2] ? 1 : 0);
     while (onCount < 2) { chanOn[(rng() * 3) | 0] = true; onCount++; }
     var chanOff = [(rng() * 2 - 1) * 1.2, (rng() * 2 - 1) * 1.2, (rng() * 2 - 1) * 1.2];
 
-    var tanA = Math.tan(angle);
     var span = Math.ceil(halfW) + 2;
-    var x, y, c, p;
-    for (y = yStart; y < yEnd; y++) {
-      var t = (y - yStart) / jitStep;
-      ji = Math.floor(t);
-      var jf = t - ji;
+    var t, o, c;
+    for (t = 0; t < len; t += 0.7) {
+      var tf = t / jitStep;
+      ji = Math.floor(tf);
+      var jf = tf - ji;
       var jx = lerp(jit[ji], jit[Math.min(ji + 1, jitN - 1)], jf);
-      var cxY = xBase + tanA * (y - yStart) + jx;
-      var x0 = Math.max(0, Math.floor(cxY - span)), x1 = Math.min(w - 1, Math.ceil(cxY + span));
-      for (x = x0; x <= x1; x++) {
-        p = (y * w + x) * 3;
+      var cxP = sx + dirX * t + perX * jx;
+      var cyP = sy + dirY * t + perY * jx;
+      for (o = -span; o <= span; o++) {
+        var px = Math.round(cxP + perX * o);
+        var py = Math.round(cyP + perY * o);
+        if (px < 0 || px >= w || py < 0 || py >= h) continue;
+        var p = (py * w + px) * 3;
         for (c = 0; c < 3; c++) {
           if (!chanOn[c]) continue;
-          var d = Math.abs(x - (cxY + chanOff[c]));
+          var d = Math.abs(o - chanOff[c]);
           if (d > halfW) continue;
           var prof = (1 + Math.cos(Math.PI * d / halfW)) / 2;  /* 余弦剖面 */
           var a = prof * opacity;
@@ -258,6 +275,45 @@
     /* 划痕 */
     var nSc = P.scratchMin + Math.floor(rng() * (P.scratchMax - P.scratchMin + 1));
     for (i = 0; i < nSc; i++) addScratch(rgb, w, h, rng, P, short);
+  }
+
+  /* ═══════════════════════════════════════════
+     2.5 画框边缘色带/色块：干板尺寸/覆盖差异 → 某通道在边缘多露一条，
+     LOC 修复成品中顶/底/侧边的整块色偏（绿带/青带/品红带/暖带）。
+     色块为整块增益偏移，从边缘向内平滑衰减 —— 是"色偏"不是"噪点"。
+     ═══════════════════════════════════════════ */
+  function applyEdgeColorBands(rgb, w, h, P, rng) {
+    if (rng() > P.bandProb) return;
+    var palette = [
+      [0.94, 1.06, 0.94],   /* 绿带（G 板多露） */
+      [0.93, 1.00, 1.07],   /* 青带（B 板多露） */
+      [1.07, 0.93, 1.02],   /* 品红带（R/B 多露） */
+      [1.05, 0.99, 0.92]    /* 暖带 */
+    ];
+    var edges = [0, 1, 2, 3]; /* 0 顶 1 底 2 左 3 右 */
+    var nBands = rng() < 0.35 ? 2 : 1;
+    var bi, x, y, p, c;
+    for (bi = 0; bi < nBands; bi++) {
+      var e = edges.splice((rng() * edges.length) | 0, 1)[0];
+      var horizontal = e < 2;
+      var dim = horizontal ? h : w;
+      var t = Math.max(4, dim * (P.bandMinW + rng() * (P.bandMaxW - P.bandMinW)));
+      var g = palette[(rng() * palette.length) | 0];
+      var sMax = 0.6 + rng() * 0.8;               /* 色偏强度随机 0.6~1.4 */
+      for (y = 0; y < h; y++) {
+        for (x = 0; x < w; x++) {
+          var d;
+          if (e === 0) d = y; else if (e === 1) d = h - 1 - y;
+          else if (e === 2) d = x; else d = w - 1 - x;
+          if (d > t) continue;
+          var wgt = smooth(1 - d / t) * sMax;      /* 边缘最强，向内归零 */
+          p = (y * w + x) * 3;
+          for (c = 0; c < 3; c++) {
+            rgb[p + c] = rgb[p + c] * (1 + (g[c] - 1) * wgt);
+          }
+        }
+      }
+    }
   }
 
   /* ═══════════════════════════════════════════
@@ -301,6 +357,7 @@
     DefectParams: DefectParams,
     applyChemicalStains: applyChemicalStains,
     addSpecksAndScratches: addSpecksAndScratches,
+    applyEdgeColorBands: applyEdgeColorBands,
     applyMisregistration: applyMisregistration
   };
 })(typeof window !== 'undefined' ? window : this);

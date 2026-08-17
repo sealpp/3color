@@ -587,6 +587,9 @@
        通道不相关正是历史照片上"彩色斑点"的成因） */
     ProkudinDefects.addSpecksAndScratches(rgb, w, h, defP, defRng);
 
+    /* 5.5) 画框边缘色带/色块：干板尺寸/覆盖差异 → 边缘整块色偏（LOC 修复成品特征） */
+    ProkudinDefects.applyEdgeColorBands(rgb, w, h, defP, defRng);
+
     /* 6) RGB 通道错位：G 不动、R/B 径向反向缩放（Lensfun 横向色差模型），
        中心对齐、四角偏移最大（≤短边 0.5%）—— 物理上是干板装夹误差的"最后一步" */
     ProkudinDefects.applyMisregistration(rgb, w, h, defP, defRng);

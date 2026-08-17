@@ -56,6 +56,11 @@
     resultImg: $('#result-img'),
     historyModal: $('#history-modal'),
     historyGrid: $('#history-grid'),
+    histTitle: $('#hist-title'),
+    btnHistDownload: $('#btn-hist-download'),
+    btnHistDelete: $('#btn-hist-delete'),
+    btnHistCancel: $('#btn-hist-cancel'),
+    btnHistoryClose: $('#btn-history-close'),
     detailModal: $('#detail-modal'),
     detailImg: $('#detail-img'),
     detailVintage: $('#detail-vintage'),
@@ -747,7 +752,10 @@
     el.historyModal.classList.remove('hidden');
     renderHistory();
   }
-  function closeHistory() { el.historyModal.classList.add('hidden'); }
+  function closeHistory() {
+    el.historyModal.classList.add('hidden');
+    setSelMode(false);
+  }
 
   function renderHistory() {
     el.historyGrid.innerHTML = '';
@@ -755,7 +763,9 @@
       items.sort(function (a, b) { return b.ts - a.ts; });
       Object.keys(historyUrls).forEach(function (k) { URL.revokeObjectURL(historyUrls[k]); });
       historyUrls = {};
+      histItems = items;
       if (!items.length) {
+        setSelMode(false);
         el.historyGrid.innerHTML = '<p class="empty">还没有照片，去拍一张吧</p>';
         return;
       }
@@ -764,13 +774,184 @@
         historyUrls[it.id] = url;
         var c = document.createElement('button');
         c.className = 'hist-item';
+        c.dataset.id = it.id;
         c.innerHTML = '<img src="' + url + '" alt="照片">';
-        c.addEventListener('click', function () { openDetail(it); });
         el.historyGrid.appendChild(c);
       });
+      /* 多选模式中重建后恢复选中态 */
+      if (selMode) {
+        el.historyGrid.classList.add('selecting');
+        selIds.forEach(function (id) {
+          var node = el.historyGrid.querySelector('.hist-item[data-id="' + id + '"]');
+          if (node) node.classList.add('sel');
+        });
+        updateSelHead();
+      }
     }).catch(function () {
       el.historyGrid.innerHTML = '<p class="empty">读取历史失败</p>';
     });
+  }
+
+  /* ---------------- history multi-select ---------------- */
+  var histItems = [];
+  var selMode = false, selIds = new Set();
+  var LONG_MS = 420;
+  var pressTimer = null, pressStart = null, pressFired = false;
+
+  function setSelMode(on) {
+    selMode = on;
+    selIds.clear();
+    if (on) {
+      el.historyGrid.classList.add('selecting');
+    } else {
+      el.historyGrid.classList.remove('selecting');
+      el.historyGrid.querySelectorAll('.hist-item.sel').forEach(function (n) { n.classList.remove('sel'); });
+      /* 复位删除确认态 */
+      clearTimeout(delTimer);
+      delArmed = false;
+      el.btnHistDelete.classList.remove('danger');
+      el.btnHistDelete.textContent = '删除';
+    }
+    el.histTitle.textContent = on ? '已选 0 张' : '照片历史';
+    el.btnHistDownload.classList.toggle('hidden', !on);
+    el.btnHistDelete.classList.toggle('hidden', !on);
+    el.btnHistCancel.classList.toggle('hidden', !on);
+    el.btnHistoryClose.classList.toggle('hidden', on);
+    updateSelHead();
+  }
+
+  function updateSelHead() {
+    var n = selIds.size;
+    el.histTitle.textContent = '已选 ' + n + ' 张';
+    el.btnHistDownload.disabled = n === 0;
+    el.btnHistDelete.disabled = n === 0;
+  }
+
+  function selectItem(id, node) {
+    if (selIds.has(id)) return;
+    selIds.add(id);
+    if (node) node.classList.add('sel');
+    updateSelHead();
+  }
+  function toggleItem(id, node) {
+    if (selIds.has(id)) { selIds.delete(id); node.classList.remove('sel'); }
+    else { selIds.add(id); node.classList.add('sel'); }
+    updateSelHead();
+  }
+  function itemNode(e) {
+    var t = e.target;
+    while (t && t !== el.historyGrid) {
+      if (t.classList && t.classList.contains('hist-item')) return t;
+      t = t.parentNode;
+    }
+    return null;
+  }
+
+  /* 长按进入多选；长按后滑动手指快速连选（iOS 相册式手势） */
+  el.historyGrid.addEventListener('pointerdown', function (e) {
+    var node = itemNode(e);
+    if (!node) return;
+    clearTimeout(pressTimer);
+    pressStart = { x: e.clientX, y: e.clientY, node: node, id: node.dataset.id };
+    pressFired = false;
+    pressTimer = setTimeout(function () {
+      pressFired = true;
+      if (!selMode) setSelMode(true);
+      selectItem(pressStart.id, pressStart.node);
+      el.historyGrid.style.touchAction = 'none';   /* 按住拖动改为连选而非滚动 */
+      if (navigator.vibrate) navigator.vibrate(12);
+    }, LONG_MS);
+  });
+  window.addEventListener('pointermove', function (e) {
+    if (!pressStart) return;
+    var dx = e.clientX - pressStart.x, dy = e.clientY - pressStart.y;
+    if (!pressFired && (dx * dx + dy * dy) > 100) {  /* 移动超过阈值 → 判定为滚动，取消长按 */
+      clearTimeout(pressTimer);
+      pressStart = null;
+      return;
+    }
+    if (!pressFired) return;
+    var under = document.elementFromPoint(e.clientX, e.clientY);
+    var node = under ? itemNode({ target: under }) : null;
+    if (node && !selIds.has(node.dataset.id)) selectItem(node.dataset.id, node);
+  });
+  function endPress(e) {
+    clearTimeout(pressTimer);
+    if (pressStart) {
+      var wasLong = pressFired;
+      var moved = Math.hypot(e.clientX - pressStart.x, e.clientY - pressStart.y);
+      el.historyGrid.style.touchAction = '';
+      pressStart = null;
+      pressFired = false;
+      if (!wasLong && moved <= 10) {             /* 短按且未移动 = 点击 */
+        var node = itemNode(e);
+        if (node) {
+          if (selMode) toggleItem(node.dataset.id, node);
+          else {
+            var item = null;
+            for (var i = 0; i < histItems.length; i++) if (String(histItems[i].id) === node.dataset.id) { item = histItems[i]; break; }
+            if (item) openDetail(item);
+          }
+        }
+      }
+    }
+  }
+  window.addEventListener('pointerup', endPress);
+  window.addEventListener('pointercancel', endPress);
+  el.historyGrid.addEventListener('contextmenu', function (e) { e.preventDefault(); }); /* 拦截原生长按菜单 */
+
+  /* 多选工具栏：下载（保存到相册/分享）/ 删除 */
+  function saveSelected() {
+    var files = [];
+    selIds.forEach(function (id) {
+      for (var i = 0; i < histItems.length; i++) {
+        if (String(histItems[i].id) === id) {
+          files.push(new File([histItems[i].blob], '3color_' + Date.now() + '_' + files.length + '.jpg', { type: 'image/jpeg' }));
+          break;
+        }
+      }
+    });
+    if (!files.length) return;
+    if (files.length === 1) { savePhoto(files[0]); return; }
+    if (navigator.canShare && navigator.canShare({ files: files })) {
+      navigator.share({ files: files, title: '3color 三色相片', text: '由三色摄影法拍摄的复古彩色照片' })
+        .then(function () { toast('已保存到相册'); })
+        .catch(function (err) {
+          if (err && err.name === 'AbortError') return;
+          files.forEach(function (f) { fallbackSave(f, f.name.replace(/\.jpg$/, '')); });
+        });
+    } else {
+      files.forEach(function (f) { fallbackSave(f, f.name.replace(/\.jpg$/, '')); });
+    }
+  }
+
+  var delArmed = false, delTimer = null;
+  function onHistDelete() {
+    if (!selIds.size) return;
+    var btn = el.btnHistDelete;
+    if (!delArmed) {
+      delArmed = true;
+      btn.classList.add('danger');
+      btn.textContent = '确认删除？';
+      clearTimeout(delTimer);
+      delTimer = setTimeout(function () {
+        delArmed = false;
+        btn.classList.remove('danger');
+        btn.textContent = '删除';
+      }, 3000);
+      return;
+    }
+    clearTimeout(delTimer);
+    delArmed = false;
+    btn.classList.remove('danger');
+    btn.textContent = '删除';
+    var ids = Array.from(selIds);
+    var tasks = ids.map(function (id) { return dbDel(Number(id)); });
+    Promise.all(tasks).then(function () {
+      if (!selIds.size) setSelMode(false);
+      renderHistory();
+      toast('已删除 ' + ids.length + ' 张');
+    }).catch(function () { toast('删除失败'); });
   }
 
   var detailId = null, detailUrl = null;
@@ -973,7 +1154,10 @@
     window.addEventListener('resize', updateSliderUI);
   })();
 
-  $('#btn-history-close').addEventListener('click', closeHistory);
+  el.btnHistoryClose.addEventListener('click', closeHistory);
+  el.btnHistCancel.addEventListener('click', function () { setSelMode(false); });
+  el.btnHistDownload.addEventListener('click', saveSelected);
+  el.btnHistDelete.addEventListener('click', onHistDelete);
   el.historyModal.addEventListener('click', function (e) { if (e.target === el.historyModal) closeHistory(); });
   $('#btn-detail-close').addEventListener('click', closeDetail);
   $('#btn-detail-save').addEventListener('click', onDetailSave);

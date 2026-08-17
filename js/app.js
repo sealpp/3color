@@ -613,6 +613,37 @@
     return new Promise(function (res) { c.toBlob(function (b) { res(b); }, 'image/jpeg', 0.92); });
   }
 
+  /* 缩略图渲染：用 canvas 替代 <img>，避免浏览器对 <img> 长按弹原生图片菜单
+     （CSS pointer-events: none 拦不住系统级菜单）。createImageBitmap 同步缩放至 220px */
+  var THUMB = 220;
+  function drawCover(canvas, src, W, H) {
+    var s = Math.max(W / src.width, H / src.height);
+    var dw = src.width * s, dh = src.height * s;
+    var dx = (W - dw) / 2, dy = (H - dh) / 2;
+    canvas.width = W; canvas.height = H;
+    var ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#0b0907';
+    ctx.fillRect(0, 0, W, H);
+    ctx.drawImage(src, dx, dy, dw, dh);
+  }
+  function thumbToCanvas(blob, canvas) {
+    if (typeof createImageBitmap === 'function') {
+      return createImageBitmap(blob, { resizeWidth: THUMB, resizeHeight: THUMB, resizeQuality: 'medium' })
+        .then(function (bmp) { drawCover(canvas, bmp, THUMB, THUMB); if (bmp.close) bmp.close(); })
+        .catch(function () { thumbViaImg(blob, canvas); });
+    }
+    return thumbViaImg(blob, canvas);
+  }
+  function thumbViaImg(blob, canvas) {
+    return new Promise(function (res) {
+      var url = URL.createObjectURL(blob);
+      var img = new Image();
+      img.onload = function () { drawCover(canvas, img, THUMB, THUMB); URL.revokeObjectURL(url); res(); };
+      img.onerror = function () { URL.revokeObjectURL(url); res(); };
+      img.src = url;
+    });
+  }
+
   /* ---------------- result ---------------- */
   function finishShoot() {
     stopCamera();
@@ -747,7 +778,6 @@
   }
 
   /* ---------------- history UI ---------------- */
-  var historyUrls = {};
   function openHistory() {
     el.historyModal.classList.remove('hidden');
     renderHistory();
@@ -761,8 +791,6 @@
     el.historyGrid.innerHTML = '';
     dbAll().then(function (items) {
       items.sort(function (a, b) { return b.ts - a.ts; });
-      Object.keys(historyUrls).forEach(function (k) { URL.revokeObjectURL(historyUrls[k]); });
-      historyUrls = {};
       histItems = items;
       if (!items.length) {
         setSelMode(false);
@@ -770,13 +798,15 @@
         return;
       }
       items.forEach(function (it) {
-        var url = URL.createObjectURL(it.blob);
-        historyUrls[it.id] = url;
         var c = document.createElement('button');
         c.className = 'hist-item';
         c.dataset.id = it.id;
-        c.innerHTML = '<img src="' + url + '" alt="照片">';
+        c.setAttribute('oncontextmenu', 'return false');
+        var cv = document.createElement('canvas');
+        cv.className = 'hist-canvas';
+        c.appendChild(cv);
         el.historyGrid.appendChild(c);
+        thumbToCanvas(it.blob, cv);
       });
       /* 多选模式中重建后恢复选中态 */
       if (selMode) {

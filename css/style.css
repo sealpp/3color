@@ -403,7 +403,7 @@ body::before {
   -webkit-user-select: none; user-select: none;
   touch-action: pan-y;
 }
-.hist-item img { width: 100%; height: 100%; object-fit: cover; display: block; pointer-events: none; }
+.hist-item .hist-canvas { width: 100%; height: 100%; display: block; pointer-events: none; }
 .hist-item:active { transform: scale(.95); border-color: var(--brass); }
 .hist-item.sel { border-color: var(--brass-hi); box-shadow: 0 0 0 2px var(--brass-hi) inset; }
 .hist-grid.selecting .hist-item:not(.sel) { opacity: .45; }

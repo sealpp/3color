@@ -36,7 +36,6 @@
     btnShoot: $('#btn-shoot'),
     btnCancelShoot: $('#btn-cancel-shoot'),
     btnHistory: $('#btn-history'),
-    btnVintage: $('#btn-vintage'),
     btnVintage2: $('#btn-vintage2'),
     btnRetake: $('#btn-retake'),
     btnSave: $('#btn-save'),
@@ -313,7 +312,6 @@
     el.btnShoot.classList.add('disabled');
     el.btnCancelShoot.classList.remove('hidden');
     el.btnHistory.classList.add('disabled');
-    el.btnVintage.classList.add('disabled');
     el.btnMode.classList.add('disabled');
     el.intervalRow.classList.add('disabled');
 
@@ -362,7 +360,6 @@
         el.btnShoot.classList.remove('disabled');
         el.btnCancelShoot.classList.add('hidden');
         el.btnHistory.classList.remove('disabled');
-        el.btnVintage.classList.remove('disabled');
         el.btnMode.classList.remove('disabled');
         el.intervalRow.classList.remove('disabled');
       }
@@ -392,7 +389,6 @@
       el.btnShoot.classList.remove('disabled');
       el.btnCancelShoot.classList.add('hidden');
       el.btnHistory.classList.remove('disabled');
-      el.btnVintage.classList.remove('disabled');
       el.btnMode.classList.remove('disabled');
       el.intervalRow.classList.remove('disabled');
       toast('本次拍摄已取消');
@@ -409,7 +405,6 @@
     hideSpringTimer();
     el.btnCancelShoot.classList.remove('hidden');
     el.btnHistory.classList.add('disabled');
-    el.btnVintage.classList.add('disabled');
     el.btnMode.classList.add('disabled');
     el.intervalRow.classList.add('disabled');
     captureManualChannel();
@@ -457,7 +452,6 @@
     el.btnShoot.classList.remove('disabled');
     el.btnCancelShoot.classList.add('hidden');
     el.btnHistory.classList.remove('disabled');
-    el.btnVintage.classList.remove('disabled');
     el.btnMode.classList.remove('disabled');
     el.intervalRow.classList.remove('disabled');
     if (!ok) {
@@ -609,7 +603,6 @@
   }
 
   function syncVintageBtns() {
-    el.btnVintage.classList.toggle('on', vintageOn);
     el.btnVintage2.classList.toggle('on', vintageOn);
   }
 
@@ -843,7 +836,6 @@
   el.btnMode.addEventListener('click', toggleMode);
   el.btnCancelShoot.addEventListener('click', abortShoot);
   el.btnHistory.addEventListener('click', openHistory);
-  el.btnVintage.addEventListener('click', toggleVintage);
   el.btnVintage2.addEventListener('click', toggleVintage);
   el.btnRetake.addEventListener('click', goCamera);
   el.btnSave.addEventListener('click', onSave);

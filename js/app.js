@@ -36,6 +36,7 @@
     btnShoot: $('#btn-shoot'),
     btnCancelShoot: $('#btn-cancel-shoot'),
     btnHistory: $('#btn-history'),
+    btnFlip: $('#btn-flip'),
     btnVintage2: $('#btn-vintage2'),
     btnRetake: $('#btn-retake'),
     btnSave: $('#btn-save'),
@@ -66,6 +67,7 @@
   /* ---------------- state ---------------- */
   var state = 'idle';            // idle | shooting | done
   var stream = null;
+  var cameraFacing = 'environment'; // environment=后置(默认) | user=前置
   var capCanvas = document.createElement('canvas');
   var capCtx = capCanvas.getContext('2d', { willReadFrequently: true });
   var plates = [];               // [{ img: ImageData(灰度), thumb: canvas, letter }]
@@ -127,7 +129,7 @@
     var base = {
       audio: false,
       video: {
-        facingMode: { ideal: 'environment' },
+        facingMode: { ideal: cameraFacing },
         width: { ideal: 1920 },
         height: { ideal: 1920 }
       }
@@ -180,6 +182,18 @@
     if (e && e.name === 'NotFoundError') return '未找到可用摄像头';
     if (e && e.name === 'NotReadableError') return '摄像头被其他应用占用';
     return '无法启动相机，请检查权限或更换浏览器';
+  }
+
+  function flipCamera() {
+    if (state !== 'idle') return;
+    var prev = cameraFacing;
+    cameraFacing = cameraFacing === 'environment' ? 'user' : 'environment';
+    resetPlates();
+    setGuide(null, false);
+    acquireAndPlay().catch(function (e) {
+      cameraFacing = prev; // 切换失败恢复原朝向
+      toast(cameraErrorMessage(e), 3600);
+    });
   }
 
   /* ---------------- capture ---------------- */
@@ -312,6 +326,7 @@
     el.btnShoot.classList.add('disabled');
     el.btnCancelShoot.classList.remove('hidden');
     el.btnHistory.classList.add('disabled');
+    el.btnFlip.classList.add('disabled');
     el.btnMode.classList.add('disabled');
     el.intervalRow.classList.add('disabled');
 
@@ -360,6 +375,7 @@
         el.btnShoot.classList.remove('disabled');
         el.btnCancelShoot.classList.add('hidden');
         el.btnHistory.classList.remove('disabled');
+        el.btnFlip.classList.remove('disabled');
         el.btnMode.classList.remove('disabled');
         el.intervalRow.classList.remove('disabled');
       }
@@ -389,6 +405,7 @@
       el.btnShoot.classList.remove('disabled');
       el.btnCancelShoot.classList.add('hidden');
       el.btnHistory.classList.remove('disabled');
+      el.btnFlip.classList.remove('disabled');
       el.btnMode.classList.remove('disabled');
       el.intervalRow.classList.remove('disabled');
       toast('本次拍摄已取消');
@@ -405,6 +422,7 @@
     hideSpringTimer();
     el.btnCancelShoot.classList.remove('hidden');
     el.btnHistory.classList.add('disabled');
+    el.btnFlip.classList.add('disabled');
     el.btnMode.classList.add('disabled');
     el.intervalRow.classList.add('disabled');
     captureManualChannel();
@@ -452,6 +470,7 @@
     el.btnShoot.classList.remove('disabled');
     el.btnCancelShoot.classList.add('hidden');
     el.btnHistory.classList.remove('disabled');
+    el.btnFlip.classList.remove('disabled');
     el.btnMode.classList.remove('disabled');
     el.intervalRow.classList.remove('disabled');
     if (!ok) {
@@ -836,6 +855,7 @@
   el.btnMode.addEventListener('click', toggleMode);
   el.btnCancelShoot.addEventListener('click', abortShoot);
   el.btnHistory.addEventListener('click', openHistory);
+  el.btnFlip.addEventListener('click', flipCamera);
   el.btnVintage2.addEventListener('click', toggleVintage);
   el.btnRetake.addEventListener('click', goCamera);
   el.btnSave.addEventListener('click', onSave);

@@ -269,6 +269,7 @@ body::before {
   align-items: center; gap: 30px;
 }
 .controls > button:first-child { justify-self: start; }
+.controls > button:last-child { justify-self: end; }
 .shutter {
   width: 76px; height: 76px; border-radius: 50%;
   border: none; cursor: pointer; position: relative;

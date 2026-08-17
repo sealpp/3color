@@ -510,43 +510,63 @@
     return n;
   }
 
-  /* 复古处理：暖色分离色调 + 褪黑 + 暗角 + 颗粒，贴近早期干板照片 */
+  /* 复古处理：以普罗库丁-戈尔斯基(Prokudin-Gorskii)数字彩色合成为参照，
+     基于对其作品实测色彩特征(轻微暖/琥珀偏色、蓝通道略压、中等饱和度、柔和
+     对比与灰雾、克制颗粒)进行风格化——保留全彩色相，仅做温和老化，贴近早期
+     三色干板照片，而非把画面染成棕褐单色。 */
   function vintageFilter(c) {
     var ctx = c.getContext('2d');
     var w = c.width, h = c.height;
     var img = ctx.getImageData(0, 0, w, h);
     var d = img.data;
-    var cxx = w / 2, cyy = h / 2, maxR = Math.hypot(cxx, cyy);
+    var cx = w / 2, cy = h / 2, maxR = Math.hypot(cx, cy);
+
+    // 白平衡（暖偏移 + 压蓝）：模拟早期乳剂蓝光响应弱与玻璃底片老化偏黄
+    var Rb = 1.07, Gb = 1.00, Bb = 0.90;
+    var sat = 0.82;      // 饱和度收敛到原值的 82%（褪色感，但保留色彩）
+    var contrast = 0.94; // 轻微降低对比
+    var lift = 0.03;     // 抬升黑位，营造灰雾/老化
+    var warm = 0.05;     // 分离色调强度：高光偏暖、暗部偏冷
 
     for (var i = 0; i < d.length; i += 4) {
-      var r = d[i], g = d[i + 1], b = d[i + 2];
-      var sr = r * 0.393 + g * 0.769 + b * 0.189;
-      var sg = r * 0.349 + g * 0.686 + b * 0.168;
-      var sb = r * 0.272 + g * 0.534 + b * 0.131;
-      r = sr * 0.55 + r * 0.45;
-      g = sg * 0.55 + g * 0.45;
-      b = sb * 0.55 + b * 0.45;
-      r = r * 1.05 + 10;
-      g = g * 1.01 + 8;
-      b = b * 0.93 + 13;
-      var lum = r * 0.299 + g * 0.587 + b * 0.114;
-      r = r * 0.92 + lum * 0.08;
-      g = g * 0.92 + lum * 0.08;
-      b = b * 0.92 + lum * 0.08;
-      d[i] = clamp(r, 0, 255);
-      d[i + 1] = clamp(g, 0, 255);
-      d[i + 2] = clamp(b, 0, 255);
+      var r = d[i] / 255, g = d[i + 1] / 255, b = d[i + 2] / 255;
+
+      // A. 白平衡：暖偏移 + 压蓝
+      r *= Rb; g *= Gb; b *= Bb;
+
+      // B. 降低饱和度（向亮度混合），保留色相 —— 不做棕褐单色
+      var lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      r = lum + (r - lum) * sat;
+      g = lum + (g - lum) * sat;
+      b = lum + (b - lum) * sat;
+
+      // C. 对比 + 灰雾（抬黑）：柔和过渡，模拟老化乳剂
+      r = (r - 0.5) * contrast + 0.5 + lift;
+      g = (g - 0.5) * contrast + 0.5 + lift;
+      b = (b - 0.5) * contrast + 0.5 + lift;
+
+      // D. 分离色调：高光暖(琥珀)、暗部冷(青)，强化三色干板的色彩性格
+      var t = (r + g + b) / 3;
+      var st = (t - 0.5) * warm;
+      r += st * 1.1;
+      g += st * 0.4;
+      b -= st * 0.9;
+
+      d[i]     = clamp(r * 255, 0, 255);
+      d[i + 1] = clamp(g * 255, 0, 255);
+      d[i + 2] = clamp(b * 255, 0, 255);
     }
 
     for (var y = 0; y < h; y++) {
       for (var x = 0; x < w; x++) {
         var p = (y * w + x) * 4;
-        var dist = Math.hypot(x - cxx, y - cyy) / maxR;
-        var vig = 1 - 0.2 * dist * dist;
-        var gr = (Math.random() * 2 - 1) * 8;
-        d[p] = clamp(d[p] * vig + gr, 0, 255);
+        var dist = Math.hypot(x - cx, y - cy) / maxR;
+        var vig = 1 - 0.16 * dist * dist;          // 柔和暗角
+        var gr = (Math.random() * 2 - 1) * 7;      // 克制颗粒（约 ±7）
+        var grc = (Math.random() * 2 - 1) * 3;     // 轻微彩色噪点
+        d[p]     = clamp(d[p] * vig + gr + grc, 0, 255);
         d[p + 1] = clamp(d[p + 1] * vig + gr, 0, 255);
-        d[p + 2] = clamp(d[p + 2] * vig + gr, 0, 255);
+        d[p + 2] = clamp(d[p + 2] * vig + gr - grc, 0, 255);
       }
     }
     ctx.putImageData(img, 0, 0);

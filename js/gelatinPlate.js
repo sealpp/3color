@@ -56,6 +56,9 @@
       haloThreshold: 0.62,   /* 高光提取阈值（>阈值视为高光） */
       haloBlurRuns: 3,       /* 低分辨率盒式模糊遍数（≈高斯 sigma） */
       haloDownsample: 4,     /* 模糊降采样比例（性能+大半径） */
+      haloTintR: 1.00,       /* 光晕色调（<1 的通道被压 → 光晕偏暖橙，模拟片基反射红光晕） */
+      haloTintG: 0.88,
+      haloTintB: 0.72,
       /* 银盐颗粒 */
       grainStrength: 0.032,  /* 中间调峰值幅度（[0,1] 域） */
       grainSizeDiv: 3,       /* 成团场除数（越小团块越大） */
@@ -216,10 +219,13 @@
         var l = lum[y * w + x];
         var pl = plateLum[y * w + x];
 
-        /* a. 光晕：滤色叠加 screen = 1-(1-l)*(1-halo*strength) */
+        /* a. 光晕：逐通道滤色叠加 screen = 1-(1-l)*(1-halo*strength*tint)
+           —— tint 让光晕偏暖橙（halation 红晕），而非纯白 */
         var hlUp = haloUp[y * w + x];
-        var screen = 1 - (1 - l) * (1 - hlUp * P.haloStrength);
-        var scale = screen / (l + 1e-6);
+        var hBase = hlUp * P.haloStrength;
+        var scaleR = (1 - (1 - l) * (1 - hBase * P.haloTintR)) / (l + 1e-6);
+        var scaleG = (1 - (1 - l) * (1 - hBase * P.haloTintG)) / (l + 1e-6);
+        var scaleB = (1 - (1 - l) * (1 - hBase * P.haloTintB)) / (l + 1e-6);
 
         /* b. 颗粒：带地板的中间调蒙版 floor + (1-floor)·4·pl·(1-pl)
            —— 真实干板在所有亮度区间都有颗粒（参考真实历史照片），但中间调稍强。
@@ -234,9 +240,9 @@
         var fine = hashNoise(x, y, sd);
         var gDelta = (clumped * P.grainStrength + fine * P.grainFine) * mid;
 
-        var nr = rgb[p] * scale + gDelta;
-        var ng = rgb[p + 1] * scale + gDelta;
-        var nb = rgb[p + 2] * scale + gDelta;
+        var nr = rgb[p] * scaleR + gDelta;
+        var ng = rgb[p + 1] * scaleG + gDelta;
+        var nb = rgb[p + 2] * scaleB + gDelta;
         if (nr < 0) nr = 0; if (nr > 1) nr = 1;
         if (ng < 0) ng = 0; if (ng > 1) ng = 1;
         if (nb < 0) nb = 0; if (nb > 1) nb = 1;

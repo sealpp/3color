@@ -560,21 +560,36 @@
       rgb[i * 3] = r; rgb[i * 3 + 1] = g; rgb[i * 3 + 2] = b;
     }
 
-    /* 3) 明胶干板质感层（正色片感光 / 玻璃光晕 / 亮度自适应银盐颗粒 / S曲线 / 暗角） */
+    /* 3) 药液痕迹：显影液低频染色（边缘集中），物理上属于显影阶段，先于颗粒 */
+    var defSeed = (Date.now() ^ Math.floor(Math.random() * 0xffffffff)) >>> 0;
+    var defP = ProkudinDefects.DefectParams({});
+    var defRng = ProkudinDefects.mulberry32(defSeed);
+    ProkudinDefects.applyChemicalStains(rgb, w, h, defP, defRng);
+
+    /* 4) 明胶干板质感层（正色片感光 / 暖调玻璃光晕 / 亮度自适应银盐颗粒 / S曲线 / 暗角）
+       —— 与缺陷层叠加后颗粒再降一档（对齐残差 std 6-8 区间） */
     GelatinPlate.applyGelatinPlate(
       rgb, w, h,
       GelatinPlate.GelatinPlateParams({
         orthoBlend: 0.65,
         haloStrength: 0.30,
-        grainStrength: 0.014,
+        grainStrength: 0.010,
         grainSizeDiv: 3,
-        grainFine: 0.008,
+        grainFine: 0.006,
         grainMaskFloor: 0.45,  /* 亮/暗端保留 45% 颗粒，匹配真实干板 */
         curveK: 6.0,
         vignetteK1: 0.20, vignetteK2: 0.03
       }),
-      0 /* seed=0 → 每张照片颗粒分布随机 */
+      defSeed
     );
+
+    /* 5) 干板乳剂缺陷：彩斑 + 划痕（RGB 三通道独立生成 —— 物理上在各干板乳剂层，
+       通道不相关正是历史照片上"彩色斑点"的成因） */
+    ProkudinDefects.addSpecksAndScratches(rgb, w, h, defP, defRng);
+
+    /* 6) RGB 通道错位：G 不动、R/B 径向反向缩放（Lensfun 横向色差模型），
+       中心对齐、四角偏移最大（≤短边 0.5%）—— 物理上是干板装夹误差的"最后一步" */
+    ProkudinDefects.applyMisregistration(rgb, w, h, defP, defRng);
 
     /* 4) 写回 */
     for (i = 0, p = 0; i < n; i++, p += 4) {

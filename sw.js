@@ -1,12 +1,14 @@
 /* 3color · Service Worker — offline-first for app shell */
 'use strict';
 
-const CACHE = '3color-v4';
+const CACHE = '3color-v5';
 const PRECACHE = [
   './',
   './index.html',
   './css/style.css',
   './js/app.js',
+  './js/gelatinPlate.js',
+  './js/prokudinDefects.js',
   './manifest.webmanifest',
   './icons/icon.svg',
   './icons/icon-192.png',

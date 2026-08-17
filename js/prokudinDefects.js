@@ -54,12 +54,17 @@
       stainCells: 3,         /* 短边上的基频格数（尺度≈1/3~1/9 短边） */
       stainEdgeBias: 0.70,   /* 边缘/四角权重增量（0=全图均匀） */
       /* 彩色斑点（通道不相关）——成色对齐三色工艺物理：
-         1 块板缺陷→互补色斑（青/品红/黄），2 块板→原色斑，3 块板→中性灰 */
-      speckDensity: 30,      /* 每 1500×1000 面积的斑点数（按面积缩放，±30% 随机） */
+         1 块板缺陷→互补色斑（青/品红/黄），2 块板→原色斑，3 块板→中性灰。
+         尺寸/透明度对齐 Kokaram dirt&sparkle 与半透明腐败模型：随机形状尺寸、
+         非二值不透明度（半透明残留原图），含少量大块霉斑/污团（fBm 式柔边） */
+      speckDensity: 45,      /* 每 1500×1000 面积的斑点数（按面积缩放，±30% 随机） */
       speckSoftRatio: 0.50,  /* 柔边（离焦）斑点比例 */
       speckBoostRatio: 0.25, /* 变亮斑比例（曝光阻挡型；其余为密度缺陷变暗型） */
       speckMinR: 0.0009,     /* 半径下限（短边比例） */
       speckMaxR: 0.0045,     /* 半径上限（短边比例，对数分布） */
+      speckMacroRatio: 0.08, /* 大斑块比例（霉斑/污团，柔边低透明） */
+      speckMacroMinR: 0.008, /* 大斑块半径下限（短边比例） */
+      speckMacroMaxR: 0.030, /* 大斑块半径上限 */
       /* 玻璃划痕（干板单张搬运 → 方向随机、多为短划；修复版残余 1~3 条淡划痕） */
       scratchMin: 1,         /* 条数下限 */
       scratchMax: 3,         /* 条数上限 */
@@ -159,16 +164,22 @@
      2. 通道独立彩斑 + 玻璃划痕（干板乳剂层缺陷，错位之前）
      ═══════════════════════════════════════════ */
 
-  /* 单个斑点：不规则团块 matte（乳剂缺陷/霉斑非正圆），按锐利/柔边两种剖面；
-     α 与极性逐通道独立 → 通道不相关呈彩色 */
+  /* 单个斑点：不规则团块 matte（乳剂缺陷/霉斑非正圆），按锐利/柔边两种剖面。
+     三色工艺物理成色：缺陷作用于 1~3 张干板；少量大斑块（霉斑/污团）柔边低透明 */
   function addSpeck(rgb, w, h, rng, P, short) {
     var cx = rng() * w, cy = rng() * h;
+    var macro = rng() < P.speckMacroRatio;
     var rMin = Math.max(1.0, P.speckMinR * short);
     var rMax = Math.max(rMin * 1.5, P.speckMaxR * short);
-    var rad = rMin * Math.pow(rMax / rMin, rng());      /* 对数分布（小斑居多） */
+    var rad;
+    if (macro) {
+      rad = short * (P.speckMacroMinR + rng() * (P.speckMacroMaxR - P.speckMacroMinR));
+    } else {
+      rad = rMin * Math.pow(rMax / rMin, rng());      /* 对数分布（小斑居多） */
+    }
     var aspect = 0.5 + rng() * 0.5;
     var rot = rng() * Math.PI;
-    var soft = rng() < P.speckSoftRatio;
+    var soft = macro ? true : (rng() < P.speckSoftRatio);  /* 大斑块恒柔边 */
     /* 三色工艺物理成色：缺陷作用于 1~3 张干板
        - 1 块板（55%）：该通道减弱 → 互补色斑（R 板损→青 / G 板损→品红 / B 板损→黄）
        - 2 块板（30%）：→ 原色斑（仅剩通道的颜色：红/绿/蓝）
@@ -184,12 +195,17 @@
     }
     plates = plates.slice(0, nPlates);
     var boost = rng() < P.speckBoostRatio;
-    var strength = 0.22 + rng() * 0.33;                  /* 单斑峰值强度（克制） */
-    /* 不规则轮廓：8 个角度控制点的半径扰动（0.65~1.35），线性插值 */
+    /* 强度：大斑块低透明（0.10~0.28），小斑深浅大范围随机（0.15~0.65）；
+       每块板再乘 0.75~1.25 抖动（同一色相族内深浅变化） */
+    var strength = macro ? (0.10 + rng() * 0.18) : (0.15 + rng() * 0.50);
+    var plateMult = [];
+    for (pi = 0; pi < plates.length; pi++) plateMult[pi] = 0.75 + rng() * 0.5;
+    /* 不规则轮廓：8 个角度控制点的半径扰动，大斑块扰动更强（0.5~1.5） */
     var NCTRL = 8;
     var ctrl = new Float32Array(NCTRL + 1);
     var ci;
-    for (ci = 0; ci < NCTRL; ci++) ctrl[ci] = 0.65 + rng() * 0.7;
+    var jitLo = macro ? 0.50 : 0.65, jitHi = macro ? 1.50 : 1.35;
+    for (ci = 0; ci < NCTRL; ci++) ctrl[ci] = jitLo + rng() * (jitHi - jitLo);
     ctrl[NCTRL] = ctrl[0];
 
     var rx = rad, ry = rad * aspect;
@@ -221,8 +237,10 @@
         if (a <= 0.003) continue;
         for (var k = 0; k < plates.length; k++) {
           c = plates[k];
-          if (boost) rgb[p + c] = rgb[p + c] + a * (1 - rgb[p + c]);  /* 曝光阻挡：通道变亮 */
-          else rgb[p + c] = rgb[p + c] * (1 - a);                     /* 密度缺陷：通道变暗 */
+          var ac = a * plateMult[k];
+          if (ac > 0.95) ac = 0.95;
+          if (boost) rgb[p + c] = rgb[p + c] + ac * (1 - rgb[p + c]);  /* 曝光阻挡：通道变亮 */
+          else rgb[p + c] = rgb[p + c] * (1 - ac);                     /* 密度缺陷：通道变暗 */
         }
       }
     }

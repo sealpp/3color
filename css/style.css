@@ -362,8 +362,7 @@ body::before {
   margin-top: 16px; width: min(100%, 480px);
   display: flex; gap: 14px;
 }
-.result-actions .primary-btn { flex: 2; }
-.result-actions .side-btn { flex: 1; }
+.result-actions > button { flex: 1; }
 
 /* ---------------- modals ---------------- */
 .modal {

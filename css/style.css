@@ -455,6 +455,8 @@ body::before {
 .detail-panel img {
   width: 100%; max-height: 56dvh; object-fit: contain;
   background: #050403;
+  -webkit-touch-callout: none;   /* 拦截 iOS/Android 长按图片弹出的原生「保存/分享」菜单 */
+  -webkit-user-select: none; user-select: none;
 }
 .detail-meta {
   margin-top: 10px; display: flex; gap: 12px; justify-content: center;

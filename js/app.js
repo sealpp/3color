@@ -911,15 +911,22 @@
     return null;
   }
 
-  /* 长按进入多选；长按后滑动手指快速连选（iOS 相册式手势） */
+  /* 长按进入多选；长按后滑动手指快速连选（iOS 相册式手势）。
+     轻点进详情/切换选中改用 click 事件（比指针敲击判定跨浏览器更稳，且不会被
+     浏览器把轻点误判为滚动而吞掉）。长按/滚动手势后置 suppressClick，抑制随之
+     而来的 click，避免「既选中又进详情」或滚动后误触详情。 */
+  var suppressClick = false;
+
   el.historyGrid.addEventListener('pointerdown', function (e) {
     var node = itemNode(e);
     if (!node) return;
+    suppressClick = false;                 /* 每个手势开始先复位，避免上次残留抑制真实点击 */
     clearTimeout(pressTimer);
     pressStart = { x: e.clientX, y: e.clientY, node: node, id: node.dataset.id };
     pressFired = false;
     pressTimer = setTimeout(function () {
       pressFired = true;
+      suppressClick = true;                /* 长按手势后抑制随后的 click */
       if (!selMode) setSelMode(true);
       anchorId = pressStart.id;
       sweepSelect(anchorId, anchorId);   /* 锚点自身先选中，拖拽时扩展为区间 */
@@ -930,8 +937,9 @@
   window.addEventListener('pointermove', function (e) {
     if (!pressStart) return;
     var dx = e.clientX - pressStart.x, dy = e.clientY - pressStart.y;
-    if (!pressFired && (dx * dx + dy * dy) > 100) {  /* 移动超过阈值 → 判定为滚动，取消长按 */
+    if (!pressFired && (dx * dx + dy * dy) > 100) {  /* 移动超过阈值 → 判定为滚动，取消长按并抑制随之 click */
       clearTimeout(pressTimer);
+      suppressClick = true;
       pressStart = null;
       return;
     }
@@ -940,29 +948,30 @@
     var node = under ? itemNode({ target: under }) : null;
     if (node) sweepSelect(anchorId, node.dataset.id);  /* 锚点 → 当前点 连续选区 */
   });
-  function endPress(e) {
+  function endPress() {
     clearTimeout(pressTimer);
     if (pressStart) {
-      var wasLong = pressFired;
-      var moved = Math.hypot(e.clientX - pressStart.x, e.clientY - pressStart.y);
       el.historyGrid.style.touchAction = '';
       pressStart = null;
       pressFired = false;
-      if (!wasLong && moved <= 10) {             /* 短按且未移动 = 点击 */
-        var node = itemNode(e);
-        if (node) {
-          if (selMode) toggleItem(node.dataset.id, node);
-          else {
-            var item = null;
-            for (var i = 0; i < histItems.length; i++) if (String(histItems[i].id) === node.dataset.id) { item = histItems[i]; break; }
-            if (item) openDetail(item);
-          }
-        }
-      }
     }
   }
   window.addEventListener('pointerup', endPress);
   window.addEventListener('pointercancel', endPress);
+
+  /* 轻点：进详情（普通模式）/ 切换选中（多选模式）。用 click 触发，跨浏览器稳定 */
+  el.historyGrid.addEventListener('click', function (e) {
+    if (suppressClick) { suppressClick = false; return; }   /* 长按/滚动手势后的 click 忽略 */
+    var node = itemNode(e);
+    if (!node) return;
+    if (selMode) {
+      toggleItem(node.dataset.id, node);
+    } else {
+      var item = null;
+      for (var i = 0; i < histItems.length; i++) if (String(histItems[i].id) === node.dataset.id) { item = histItems[i]; break; }
+      if (item) openDetail(item);
+    }
+  });
   el.historyGrid.addEventListener('contextmenu', function (e) { e.preventDefault(); }); /* 拦截原生长按菜单 */
 
   /* 多选工具栏：下载（保存到相册/分享）/ 删除 */
@@ -1228,6 +1237,7 @@
   $('#btn-detail-save').addEventListener('click', onDetailSave);
   $('#btn-detail-delete').addEventListener('click', onDetailDelete);
   el.detailModal.addEventListener('click', function (e) { if (e.target === el.detailModal) closeDetail(); });
+  el.detailModal.addEventListener('contextmenu', function (e) { e.preventDefault(); }); /* 拦截详情大图原生图片菜单 */
 
   // 切后台时中止拍摄 / 释放相机；回前台恢复
   document.addEventListener('visibilitychange', function () {

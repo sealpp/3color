@@ -704,24 +704,28 @@
   }
 
   /* ---------------- save / share ---------------- */
+  /* 直接保存到设备（下载）：Android 触发浏览器下载，iOS 打开新窗口供长按存图 */
   function savePhoto(blob, filename) {
     filename = filename || ('3color_' + Date.now());
+    return fallbackSave(blob, filename);
+  }
+
+  /* 分享到系统面板（微信/小红书/蓝牙等）；不保证有"保存到相册"选项（MIUI 等无此入口） */
+  function sharePhoto(blob, filename) {
+    filename = filename || ('3color_' + Date.now());
     var file = new File([blob], filename + '.jpg', { type: 'image/jpeg' });
-    // 1) 系统分享/存储（Android Chrome、iOS Safari 15+）
     if (navigator.canShare && navigator.canShare({ files: [file] })) {
       return navigator.share({
         files: [file],
         title: '3color 三色相片',
         text: '由三色摄影法拍摄的复古彩色照片'
-      }).then(function () {
-        toast('已保存到相册');
-        return true;
       }).catch(function (e) {
-        if (e && e.name === 'AbortError') return true;
-        return fallbackSave(blob, filename);
+        if (e && e.name === 'AbortError') return;
+        toast('分享不可用');
       });
     }
-    return fallbackSave(blob, filename);
+    toast('当前浏览器不支持分享');
+    return Promise.resolve();
   }
 
   function fallbackSave(blob, filename) {
@@ -747,6 +751,10 @@
   function onSave() {
     var c = vintageOn ? finalCanvas : rawCanvas;
     canvasToBlob(c).then(function (blob) { return savePhoto(blob); });
+  }
+  function onShare() {
+    var c = vintageOn ? finalCanvas : rawCanvas;
+    canvasToBlob(c).then(function (blob) { return sharePhoto(blob); });
   }
 
   /* ---------------- IndexedDB history ---------------- */
@@ -1054,6 +1062,17 @@
       }
     });
   }
+  function onDetailShare() {
+    if (!detailId) return;
+    dbAll().then(function (items) {
+      for (var i = 0; i < items.length; i++) {
+        if (items[i].id === detailId) {
+          sharePhoto(items[i].blob);
+          return;
+        }
+      }
+    });
+  }
 
   var deleteArmed = false, deleteTimer = null;
   function onDetailDelete() {
@@ -1132,6 +1151,8 @@
   el.btnVintage2.addEventListener('click', toggleVintage);
   el.btnRetake.addEventListener('click', goCamera);
   el.btnSave.addEventListener('click', onSave);
+  el.btnShare = document.getElementById('btn-share');
+  if (el.btnShare) el.btnShare.addEventListener('click', onShare);
 
   /* ---------------- 换版间隔滑轨 ---------------- */
   var SLIDER_PAD = 26; // 轨道左右留白（px），保证滑块两端不溢出
@@ -1235,6 +1256,7 @@
   el.historyModal.addEventListener('click', function (e) { if (e.target === el.historyModal) closeHistory(); });
   $('#btn-detail-close').addEventListener('click', closeDetail);
   $('#btn-detail-save').addEventListener('click', onDetailSave);
+  $('#btn-detail-share').addEventListener('click', onDetailShare);
   $('#btn-detail-delete').addEventListener('click', onDetailDelete);
   el.detailModal.addEventListener('click', function (e) { if (e.target === el.detailModal) closeDetail(); });
   el.detailModal.addEventListener('contextmenu', function (e) { e.preventDefault(); }); /* 拦截详情大图原生图片菜单 */

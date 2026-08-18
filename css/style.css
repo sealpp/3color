@@ -363,9 +363,13 @@ body::before {
 .result-toggle { margin-top: 14px; }
 .result-actions {
   margin-top: 16px; width: min(100%, 480px);
-  display: flex; gap: 14px;
+  display: flex; gap: 10px;
 }
 .result-actions > button { flex: 1; }
+.result-actions .primary-action {
+  border-color: var(--brass); color: var(--brass-hi);
+  box-shadow: 0 0 10px rgba(200,164,92,.2);
+}
 
 /* ---------------- modals ---------------- */
 .modal {

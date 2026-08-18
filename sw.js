@@ -1,7 +1,7 @@
 /* 3color · Service Worker — offline-first for app shell */
 'use strict';
 
-const CACHE = '3color-v8';
+const CACHE = '3color-v9';
 const PRECACHE = [
   './',
   './index.html',

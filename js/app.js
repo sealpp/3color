@@ -844,6 +844,7 @@
   var selMode = false, selIds = new Set();
   var LONG_MS = 420;
   var pressTimer = null, pressStart = null, pressFired = false;
+  var anchorId = null;   /* 长按拖拽扫选的起点（锚点）图片 id */
 
   function setSelMode(on) {
     selMode = on;
@@ -874,10 +875,26 @@
     el.btnHistDelete.disabled = n === 0;
   }
 
-  function selectItem(id, node) {
-    if (selIds.has(id)) return;
-    selIds.add(id);
-    if (node) node.classList.add('sel');
+  function idxOfId(id) {
+    for (var i = 0; i < histItems.length; i++) if (String(histItems[i].id) === id) return i;
+    return -1;
+  }
+  /* 区间扫选：以 anchor 为起点、cur 为终点，选中二者之间按顺序排列的全部图片
+     （DOM/数组顺序即相册展示顺序，最新在前）。与主流手机相册「长按拖拽」手势一致：
+     起点固定为锚点，终点跟随手指，选区是锚点到终点之间的连续整段，而非划过的零散集合 */
+  function sweepSelect(aId, bId) {
+    if (!selMode) return;
+    var ai = idxOfId(aId), bi = idxOfId(bId);
+    if (ai < 0 || bi < 0) return;
+    var lo = Math.min(ai, bi), hi = Math.max(ai, bi);
+    selIds.clear();
+    el.historyGrid.querySelectorAll('.hist-item.sel').forEach(function (n) { n.classList.remove('sel'); });
+    for (var i = lo; i <= hi; i++) {
+      var id = String(histItems[i].id);
+      selIds.add(id);
+      var node = el.historyGrid.querySelector('.hist-item[data-id="' + id + '"]');
+      if (node) node.classList.add('sel');
+    }
     updateSelHead();
   }
   function toggleItem(id, node) {
@@ -904,7 +921,8 @@
     pressTimer = setTimeout(function () {
       pressFired = true;
       if (!selMode) setSelMode(true);
-      selectItem(pressStart.id, pressStart.node);
+      anchorId = pressStart.id;
+      sweepSelect(anchorId, anchorId);   /* 锚点自身先选中，拖拽时扩展为区间 */
       el.historyGrid.style.touchAction = 'none';   /* 按住拖动改为连选而非滚动 */
       if (navigator.vibrate) navigator.vibrate(12);
     }, LONG_MS);
@@ -920,7 +938,7 @@
     if (!pressFired) return;
     var under = document.elementFromPoint(e.clientX, e.clientY);
     var node = under ? itemNode({ target: under }) : null;
-    if (node && !selIds.has(node.dataset.id)) selectItem(node.dataset.id, node);
+    if (node) sweepSelect(anchorId, node.dataset.id);  /* 锚点 → 当前点 连续选区 */
   });
   function endPress(e) {
     clearTimeout(pressTimer);

@@ -626,19 +626,36 @@
     ctx.fillRect(0, 0, W, H);
     ctx.drawImage(src, dx, dy, dw, dh);
   }
-  function thumbToCanvas(blob, canvas) {
+  /* 缩略图渲染：用 <div> + background-image，而非 <img>/<canvas>
+     原因：Mi/QQ/Chrome 等浏览器对 <img>/<canvas> 长按会弹系统级「图片保存」菜单，
+     该菜单 CSS pointer-events 拦不住、contextmenu 也未必生效；普通 <div> 不是媒体元素，
+     任何浏览器都不会对其弹图片菜单。220px 缩略图转 dataURL 作背景，免 URL 生命周期管理 */
+  function thumbToBackground(blob, div) {
+    var set = function (url) { div.style.backgroundImage = 'url("' + url + '")'; };
     if (typeof createImageBitmap === 'function') {
       return createImageBitmap(blob, { resizeWidth: THUMB, resizeHeight: THUMB, resizeQuality: 'medium' })
-        .then(function (bmp) { drawCover(canvas, bmp, THUMB, THUMB); if (bmp.close) bmp.close(); })
-        .catch(function () { thumbViaImg(blob, canvas); });
+        .then(function (bmp) {
+          var oc = document.createElement('canvas');
+          oc.width = THUMB; oc.height = THUMB;
+          drawCover(oc, bmp, THUMB, THUMB);
+          if (bmp.close) bmp.close();
+          try { set(oc.toDataURL('image/jpeg', 0.82)); } catch (e) {}
+        })
+        .catch(function () { return thumbViaImgBg(blob, div); });
     }
-    return thumbViaImg(blob, canvas);
+    return thumbViaImgBg(blob, div);
   }
-  function thumbViaImg(blob, canvas) {
+  function thumbViaImgBg(blob, div) {
     return new Promise(function (res) {
       var url = URL.createObjectURL(blob);
       var img = new Image();
-      img.onload = function () { drawCover(canvas, img, THUMB, THUMB); URL.revokeObjectURL(url); res(); };
+      img.onload = function () {
+        var oc = document.createElement('canvas');
+        oc.width = THUMB; oc.height = THUMB;
+        drawCover(oc, img, THUMB, THUMB);
+        try { div.style.backgroundImage = 'url("' + oc.toDataURL('image/jpeg', 0.82) + '")'; } catch (e) {}
+        URL.revokeObjectURL(url); res();
+      };
       img.onerror = function () { URL.revokeObjectURL(url); res(); };
       img.src = url;
     });
@@ -802,11 +819,11 @@
         c.className = 'hist-item';
         c.dataset.id = it.id;
         c.setAttribute('oncontextmenu', 'return false');
-        var cv = document.createElement('canvas');
-        cv.className = 'hist-canvas';
-        c.appendChild(cv);
+        var thumb = document.createElement('div');
+        thumb.className = 'hist-thumb';
+        c.appendChild(thumb);
         el.historyGrid.appendChild(c);
-        thumbToCanvas(it.blob, cv);
+        thumbToBackground(it.blob, thumb);
       });
       /* 多选模式中重建后恢复选中态 */
       if (selMode) {

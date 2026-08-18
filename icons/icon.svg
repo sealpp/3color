@@ -1,11 +1,17 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <rect width="512" height="512" rx="104" fill="#12100d"/>
-  <circle cx="256" cy="256" r="206" fill="none" stroke="#c8a45c" stroke-width="24"/>
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="50%" r="70%">
+      <stop offset="0%" stop-color="#1a1612"/>
+      <stop offset="100%" stop-color="#12100d"/>
+    </radialGradient>
+  </defs>
+  <rect width="512" height="512" rx="104" fill="url(#bg)"/>
+  <!-- 黄铜细环 -->
+  <circle cx="256" cy="256" r="192" fill="none" stroke="#c8a45c" stroke-width="3" opacity="0.7"/>
+  <!-- 三原色圆 · 等边三角形对称布局（重心精确居中） -->
   <g style="mix-blend-mode:screen">
-    <circle cx="256" cy="188" r="122" fill="#d9534f"/>
-    <circle cx="170" cy="354" r="122" fill="#7cb26a"/>
-    <circle cx="342" cy="354" r="122" fill="#6f8fd1"/>
+    <circle cx="256" cy="218" r="102" fill="#e05548"/>
+    <circle cx="191" cy="332" r="102" fill="#6db860"/>
+    <circle cx="321" cy="332" r="102" fill="#5a8fd8"/>
   </g>
-  <circle cx="256" cy="256" r="78" fill="#efe6d8" opacity="0.95"/>
-  <circle cx="256" cy="256" r="38" fill="#12100d"/>
 </svg>

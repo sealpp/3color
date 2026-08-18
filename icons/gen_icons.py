@@ -1,5 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Generate 3color PWA icons (pure stdlib PNG encoder, no deps)."""
+"""Generate 3color PWA icons (pure stdlib PNG encoder, no deps).
+
+   Layout v2 — symmetric equilateral triangle (centroid at canvas center).
+   Red top, green bottom-left, blue bottom-right. No center occlusion.
+"""
 import struct
 import zlib
 import math
@@ -30,27 +34,54 @@ def soft(dist, radius, aa=1.4):
     """Anti-aliased circle coverage in [0,1]."""
     return max(0.0, min(1.0, (radius - dist) / aa + 0.5))
 
-BG    = (20, 17, 14)
+BG    = (18, 16, 13)
 BRASS = (200, 164, 92)
-RED   = (217, 83, 79)
-GREEN = (124, 178, 106)
-BLUE  = (111, 143, 209)
+RED   = (224, 85, 72)
+GREEN = (109, 184, 96)
+BLUE  = (90, 143, 216)
+
+# 等边三角形参数（重心在画布中心）
+# 圆心距 d=125, 半径 r=102 → 重叠自然呈现加法混色
+# 三角形高 h = d * sqrt(3)/2 ≈ 108.3
+# 重心到顶点距离 = h * 2/3 ≈ 72.2
+# 顶点(红): (cx, cy - 72.2), 左下(绿): (cx - d/2, cy + 36.1), 右下(蓝): (cx + d/2, cy + 36.1)
 
 def build(size, maskable):
-    w = h = float(size)
+    w = float(size)
     c = w / 2.0
     maxr = math.hypot(c, c)
+
+    # 归一化坐标（相对于画布宽度的比例）
     if maskable:
-        circles = [(0.50, 0.40, 0.175, RED), (0.35, 0.67, 0.175, GREEN), (0.65, 0.67, 0.175, BLUE)]
+        # maskable 版：圆稍小、更紧凑，确保在安全区内
+        r_frac = 0.185          # radius / width
+        d_frac = 0.230          # center distance / width
+        h_frac = d_frac * math.sqrt(3) / 2
+        cy_off = h_frac * 2 / 3  # centroid to vertex
+        cx_off = d_frac / 2
+        circles = [
+            (0.50, 0.50 - cy_off, r_frac, RED),
+            (0.50 - cx_off, 0.50 + cy_off / 2, r_frac, GREEN),
+            (0.50 + cx_off, 0.50 + cy_off / 2, r_frac, BLUE),
+        ]
         ring = None
     else:
-        circles = [(0.50, 0.36, 0.24, RED), (0.33, 0.70, 0.24, GREEN), (0.67, 0.70, 0.24, BLUE)]
-        ring = (0.40, 0.022)  # radius + half stroke (fractions of w)
+        r_frac = 0.199
+        d_frac = 0.244
+        h_frac = d_frac * math.sqrt(3) / 2
+        cy_off = h_frac * 2 / 3
+        cx_off = d_frac / 2
+        circles = [
+            (0.50, 0.50 - cy_off, r_frac, RED),
+            (0.50 - cx_off, 0.50 + cy_off / 2, r_frac, GREEN),
+            (0.50 + cx_off, 0.50 + cy_off / 2, r_frac, BLUE),
+        ]
+        ring = (0.375, 0.006)  # brass ring: radius fraction + half-stroke fraction
 
     def pixel(x, y):
         fx, fy = x + 0.5, y + 0.5
         dist_c = math.hypot(fx - c, fy - c)
-        vig = 1.0 - 0.12 * (dist_c / maxr) ** 2
+        vig = 1.0 - 0.10 * (dist_c / maxr) ** 2
         r = BG[0] * vig
         g = BG[1] * vig
         b = BG[2] * vig
@@ -58,9 +89,9 @@ def build(size, maskable):
             d = math.hypot(fx - cx_ * w, fy - cy_ * w)
             co = soft(d, rad * w)
             if co > 0:
-                r += col[0] * co * 1.15
-                g += col[1] * co * 1.15
-                b += col[2] * co * 1.15
+                r += col[0] * co * 1.12
+                g += col[1] * co * 1.12
+                b += col[2] * co * 1.12
         if ring:
             rr, half = ring
             d = math.hypot(fx - c, fy - c)

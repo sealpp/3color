@@ -78,6 +78,10 @@
   var plates = [];               // [{ img: ImageData(灰度), thumb: canvas, letter }]
   var rawCanvas = null;          // 未处理合成
   var finalCanvas = null;        // 展示版本（复古滤镜后）
+  var shootGen = 0;              // 每次拍摄自增，用于「重拍丢弃」竞态判定
+  var currentPhotoId = null;     // 当前结果页照片在相册中的 id（自动保存后赋值）
+  var discardGen = -1;           // 若等于某次 shootGen，则该次照片在保存完成后立即删除
+  var photoKept = false;         // 用户已点「保存/分享」，重拍时不再丢弃
   var shootAbort = false;
   var vintageOn = true;
   var soundOn = true;
@@ -676,10 +680,15 @@
       el.plateStrip.appendChild(it);
     });
 
-    // 自动存入历史（相册式）
+    // 自动存入历史（相册式）。若用户在结果页点「重拍」，则该张被丢弃（见 discardCurrentPhoto）
+    var myGen = ++shootGen;
+    currentPhotoId = null;
+    photoKept = false;
     canvasToBlob(finalCanvas).then(function (blob) {
       return dbAdd({ blob: blob, vintage: vintageOn, ts: Date.now() });
-    }).then(function () {
+    }).then(function (id) {
+      if (discardGen === myGen) { dbDel(id); return; }  /* 已点重拍 → 保存完成后立即删除 */
+      currentPhotoId = id;
       toast('照片已存入「历史」');
     }).catch(function (e) { console.warn(e); });
 
@@ -749,10 +758,12 @@
   }
 
   function onSave() {
+    photoKept = true;   /* 用户明确保留，重拍时不再丢弃 */
     var c = vintageOn ? finalCanvas : rawCanvas;
     canvasToBlob(c).then(function (blob) { return savePhoto(blob); });
   }
   function onShare() {
+    photoKept = true;   /* 用户明确保留，重拍时不再丢弃 */
     var c = vintageOn ? finalCanvas : rawCanvas;
     canvasToBlob(c).then(function (blob) { return sharePhoto(blob); });
   }
@@ -775,8 +786,8 @@
     return dbOpen().then(function (db) {
       return new Promise(function (res, rej) {
         var tx = db.transaction(STORE, 'readwrite');
-        tx.objectStore(STORE).add(item);
-        tx.oncomplete = function () { res(); };
+        var req = tx.objectStore(STORE).add(item);
+        tx.oncomplete = function () { res(req.result); };  /* 返回自增 id，供「重拍丢弃」删除 */
         tx.onerror = function () { rej(tx.error); };
       });
     });
@@ -1102,7 +1113,20 @@
   }
 
   /* ---------------- retake ---------------- */
+  /* 重拍/丢弃当前结果页照片：用户未点过保存/分享才丢弃。
+     若自动保存已完成 → 立即从相册删除；若仍在保存中 → 标记 discardGen，
+     待其完成回调里删除（用 shootGen 代际避免与后续新拍摄竞态）。 */
+  function discardCurrentPhoto() {
+    if (photoKept) return;            /* 用户已保存/分享，保留在相册 */
+    discardGen = shootGen;
+    if (currentPhotoId != null) {
+      dbDel(currentPhotoId);
+      currentPhotoId = null;
+    }
+  }
+
   function goCamera() {
+    discardCurrentPhoto();            /* 重拍：未保留的当前照片直接丢弃 */
     stopCamera();
     state = 'idle';
     plates = [];

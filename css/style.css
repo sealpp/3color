@@ -388,30 +388,65 @@ body::before {
 .modal-head {
   display: flex; align-items: center; justify-content: space-between;
   padding: 14px 18px; border-bottom: 1px solid var(--line);
+  flex-shrink: 0;   /* 头部不被压缩，网格独立滚动 */
 }
 .modal-head h2 { font-size: 16px; letter-spacing: .22em; color: var(--brass-hi); font-weight: 600; }
 
 .hist-grid {
   display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
-  padding: 14px; overflow-y: auto;
+  padding: 14px; overflow-y: auto; min-height: 0;
   -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
 }
 .hist-item {
-  aspect-ratio: 1; border-radius: 6px; overflow: hidden;
-  border: 1px solid var(--line); background: #0b0907;
-  padding: 0; cursor: pointer;
+  position: relative;
+  /* 用 padding-top:100% 撑出正方形，比 aspect-ratio 跨浏览器更稳，
+     避免某些浏览器下行高塌陷导致缩略图被压扁、上下行重叠只露顶部 */
+  padding-top: 100%;
+  border-radius: 6px; overflow: hidden;
+  border: 3px solid var(--line); background: #0b0907;
+  cursor: pointer;
   -webkit-touch-callout: none;   /* 拦截 iOS 长按图片菜单 */
   -webkit-user-select: none; user-select: none;
   touch-action: pan-y;
 }
 .hist-item .hist-thumb {
-  width: 100%; height: 100%; display: block;
+  position: absolute; inset: 0;
   background-size: cover; background-position: center; background-color: #0b0907;
   pointer-events: none;
 }
 .hist-item:active { transform: scale(.95); border-color: var(--brass); }
-.hist-item.sel { border-color: var(--brass-hi); box-shadow: 0 0 0 2px var(--brass-hi) inset; }
-.hist-grid.selecting .hist-item:not(.sel) { opacity: .45; }
+
+/* 选择模式：加粗高亮边框 + 外发光；未选图片不再半透明（保持原亮度） */
+.hist-item.sel {
+  border-color: var(--brass-hi);
+  box-shadow: 0 0 0 3px rgba(200,164,92,.45), 0 0 16px rgba(200,164,92,.55);
+  z-index: 1;
+}
+
+/* 选择模式下：未选图片左上角显示空勾选圈，提示可点选 */
+.hist-grid.selecting .hist-item:not(.sel)::before {
+  content: "";
+  position: absolute; top: 6px; left: 6px;
+  width: 22px; height: 22px; border-radius: 50%;
+  border: 2px solid rgba(239,230,216,.6);
+  background: rgba(18,16,13,.4);
+  z-index: 2;
+}
+
+/* 选中图片左上角：实心黄铜勾选框 */
+.hist-item.sel::after {
+  content: "\2713";
+  position: absolute; top: 6px; left: 6px;
+  width: 22px; height: 22px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 50%;
+  background: var(--brass);
+  color: #16110d;
+  font-size: 14px; font-weight: 800; line-height: 1;
+  border: 2px solid #16110d;
+  box-shadow: 0 1px 4px rgba(0,0,0,.6);
+  z-index: 3;
+}
 .hist-tools { display: flex; gap: 8px; align-items: center; }
 .hist-tools .ghost-btn { min-width: 0; padding: 6px 10px; }
 .empty { grid-column: 1 / -1; text-align: center; color: var(--muted); font-size: 14px; padding: 40px 0; letter-spacing: .1em; }

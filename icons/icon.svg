@@ -8,10 +8,10 @@
   <rect width="512" height="512" rx="104" fill="url(#bg)"/>
   <!-- 黄铜细环 -->
   <circle cx="256" cy="256" r="192" fill="none" stroke="#c8a45c" stroke-width="3" opacity="0.7"/>
-  <!-- 三原色圆 · 等边三角形对称布局（重心精确居中） -->
+  <!-- 三原色圆 · 等边三角形对称布局（饱和基色，screen 混色出正确黄/青/品红/白） -->
   <g style="mix-blend-mode:screen">
-    <circle cx="256" cy="218" r="102" fill="#e05548"/>
-    <circle cx="191" cy="332" r="102" fill="#6db860"/>
-    <circle cx="321" cy="332" r="102" fill="#5a8fd8"/>
+    <circle cx="256" cy="218" r="102" fill="#eb4137"/>
+    <circle cx="191" cy="332" r="102" fill="#41c355"/>
+    <circle cx="321" cy="332" r="102" fill="#4178eb"/>
   </g>
 </svg>

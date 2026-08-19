@@ -35,7 +35,6 @@
     btnStart: $('#btn-start'),
     btnShoot: $('#btn-shoot'),
     btnCancelShoot: $('#btn-cancel-shoot'),
-    btnHistory: $('#btn-history'),
     btnFlip: $('#btn-flip'),
     btnVintage2: $('#btn-vintage2'),
     btnRetake: $('#btn-retake'),
@@ -267,6 +266,10 @@
   }
 
   /* ---------------- shooting flow ---------------- */
+  /* 拍摄中禁用相册入口与预览小窗，避免误触 */
+  function setCaptureDisabled(d) {
+    $$('[data-album], [data-preview]').forEach(function (b) { b.classList.toggle('disabled', d); });
+  }
   function setPlateState(i, cls) {
     var p = el.plates[i];
     p.classList.remove('pending', 'active', 'done');
@@ -334,7 +337,7 @@
     hideSpringTimer();
     el.btnShoot.classList.add('disabled');
     el.btnCancelShoot.classList.remove('hidden');
-    el.btnHistory.classList.add('disabled');
+    setCaptureDisabled(true);
     el.btnFlip.classList.add('disabled');
     el.btnMode.classList.add('disabled');
     el.intervalRow.classList.add('disabled');
@@ -383,7 +386,7 @@
       } finally {
         el.btnShoot.classList.remove('disabled');
         el.btnCancelShoot.classList.add('hidden');
-        el.btnHistory.classList.remove('disabled');
+        setCaptureDisabled(false);
         el.btnFlip.classList.remove('disabled');
         el.btnMode.classList.remove('disabled');
         el.intervalRow.classList.remove('disabled');
@@ -413,7 +416,7 @@
       hideSpringTimer();
       el.btnShoot.classList.remove('disabled');
       el.btnCancelShoot.classList.add('hidden');
-      el.btnHistory.classList.remove('disabled');
+      setCaptureDisabled(false);
       el.btnFlip.classList.remove('disabled');
       el.btnMode.classList.remove('disabled');
       el.intervalRow.classList.remove('disabled');
@@ -430,7 +433,7 @@
     resetPlates();
     hideSpringTimer();
     el.btnCancelShoot.classList.remove('hidden');
-    el.btnHistory.classList.add('disabled');
+    setCaptureDisabled(true);
     el.btnFlip.classList.add('disabled');
     el.btnMode.classList.add('disabled');
     el.intervalRow.classList.add('disabled');
@@ -478,7 +481,7 @@
   function finishManual(ok) {
     el.btnShoot.classList.remove('disabled');
     el.btnCancelShoot.classList.add('hidden');
-    el.btnHistory.classList.remove('disabled');
+    setCaptureDisabled(false);
     el.btnFlip.classList.remove('disabled');
     el.btnMode.classList.remove('disabled');
     el.intervalRow.classList.remove('disabled');
@@ -665,6 +668,29 @@
     });
   }
 
+  /* ---------------- 最近照片预览小窗 ---------------- */
+  var lastPhotoItem = null;   /* 相册最新一张，供预览小窗使用 */
+  function renderPreviews() {
+    $$('[data-preview]').forEach(function (btn) {
+      var img = btn.querySelector('.preview-img');
+      if (!img) return;
+      if (!lastPhotoItem) {
+        btn.classList.add('is-empty');
+        img.style.backgroundImage = '';
+        return;
+      }
+      btn.classList.remove('is-empty');
+      thumbToBackground(lastPhotoItem.blob, img);
+    });
+  }
+  function refreshLatestPhoto() {
+    dbAll().then(function (items) {
+      items.sort(function (a, b) { return b.ts - a.ts; });
+      lastPhotoItem = items.length ? items[0] : null;
+      renderPreviews();
+    }).catch(function () { renderPreviews(); });
+  }
+
   /* ---------------- result ---------------- */
   function finishShoot() {
     stopCamera();
@@ -821,6 +847,7 @@
   function closeHistory() {
     el.historyModal.classList.add('hidden');
     setSelMode(false);
+    refreshLatestPhoto();   /* 返回后同步预览小窗（可能新增/删除了照片） */
   }
 
   function renderHistory() {
@@ -1043,6 +1070,7 @@
     Promise.all(tasks).then(function () {
       if (!selIds.size) setSelMode(false);
       renderHistory();
+      refreshLatestPhoto();
       toast('已删除 ' + ids.length + ' 张');
     }).catch(function () { toast('删除失败'); });
   }
@@ -1108,6 +1136,7 @@
     dbDel(id).then(function () {
       closeDetail();
       renderHistory();
+      refreshLatestPhoto();
       toast('已删除');
     });
   }
@@ -1170,7 +1199,13 @@
   });
   el.btnMode.addEventListener('click', toggleMode);
   el.btnCancelShoot.addEventListener('click', abortShoot);
-  el.btnHistory.addEventListener('click', openHistory);
+  $$('[data-album]').forEach(function (b) { b.addEventListener('click', openHistory); });
+  $$('[data-preview]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      if (lastPhotoItem) openDetail(lastPhotoItem);
+      else openHistory();
+    });
+  });
   el.btnFlip.addEventListener('click', flipCamera);
   el.btnVintage2.addEventListener('click', toggleVintage);
   el.btnRetake.addEventListener('click', goCamera);
@@ -1284,6 +1319,8 @@
   $('#btn-detail-delete').addEventListener('click', onDetailDelete);
   el.detailModal.addEventListener('click', function (e) { if (e.target === el.detailModal) closeDetail(); });
   el.detailModal.addEventListener('contextmenu', function (e) { e.preventDefault(); }); /* 拦截详情大图原生图片菜单 */
+
+  refreshLatestPhoto();   /* 初始化时拉取相册最新一张，填充预览小窗 */
 
   // 切后台时中止拍摄 / 释放相机；回前台恢复
   document.addEventListener('visibilitychange', function () {

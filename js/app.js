@@ -1240,6 +1240,7 @@
   el.btnHistDelete.addEventListener('click', onHistDelete);
   el.historyModal.addEventListener('click', function (e) { if (e.target === el.historyModal) closeHistory(); });
   $('#btn-detail-close').addEventListener('click', closeDetail);
+  $('#btn-detail-album').addEventListener('click', function () { closeDetail(); openHistory(); });
   $('#btn-detail-save').addEventListener('click', onDetailSave);
   $('#btn-detail-share').addEventListener('click', onDetailShare);
   $('#btn-detail-delete').addEventListener('click', onDetailDelete);

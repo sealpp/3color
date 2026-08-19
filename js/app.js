@@ -689,7 +689,7 @@
     }).then(function (id) {
       if (discardGen === myGen) { dbDel(id); return; }  /* 已点重拍 → 保存完成后立即删除 */
       currentPhotoId = id;
-      toast('照片已存入「历史」');
+      toast('照片已存入「相册」');
     }).catch(function (e) { console.warn(e); });
 
     showScreen('result');
@@ -854,7 +854,7 @@
         updateSelHead();
       }
     }).catch(function () {
-      el.historyGrid.innerHTML = '<p class="empty">读取历史失败</p>';
+      el.historyGrid.innerHTML = '<p class="empty">读取相册失败</p>';
     });
   }
 
@@ -879,7 +879,7 @@
       el.btnHistDelete.classList.remove('danger');
       el.btnHistDelete.textContent = '删除';
     }
-    el.histTitle.textContent = on ? '已选 0 张' : '照片历史';
+    el.histTitle.textContent = on ? '已选 0 张' : '相册';
     el.btnHistDownload.classList.toggle('hidden', !on);
     el.btnHistDelete.classList.toggle('hidden', !on);
     el.btnHistCancel.classList.toggle('hidden', !on);

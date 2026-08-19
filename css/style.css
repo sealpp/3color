@@ -305,9 +305,6 @@ body::before {
 .preview-thumb:active { transform: scale(.94); }
 .preview-thumb.disabled { pointer-events: none; opacity: .5; }
 
-/* 首个页面顶部：相册入口 + 最近照片预览 */
-.intro-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
-
 .shutter {
   width: 76px; height: 76px; border-radius: 50%;
   border: none; cursor: pointer; position: relative;

@@ -30,15 +30,12 @@
 
   /* ---------------- elements ---------------- */
   var el = {
-    screens: { intro: $('#screen-intro'), camera: $('#screen-camera'), result: $('#screen-result') },
+    screens: { intro: $('#screen-intro'), camera: $('#screen-camera') },
     video: $('#video'),
     btnStart: $('#btn-start'),
     btnShoot: $('#btn-shoot'),
     btnCancelShoot: $('#btn-cancel-shoot'),
     btnFlip: $('#btn-flip'),
-    btnVintage2: $('#btn-vintage2'),
-    btnRetake: $('#btn-retake'),
-    btnSave: $('#btn-save'),
     btnMode: $('#btn-mode'),
     chip: $('#chip'),
     holdMsg: $('#hold-msg'),
@@ -51,8 +48,6 @@
     sliderFill: $('#slider-fill'),
     sliderThumb: $('#slider-thumb'),
     thumbVal: $('#thumb-val'),
-    plateStrip: $('#plate-strip'),
-    resultImg: $('#result-img'),
     historyModal: $('#history-modal'),
     historyGrid: $('#history-grid'),
     histTitle: $('#hist-title'),
@@ -77,10 +72,6 @@
   var plates = [];               // [{ img: ImageData(灰度), thumb: canvas, letter }]
   var rawCanvas = null;          // 未处理合成
   var finalCanvas = null;        // 展示版本（复古滤镜后）
-  var shootGen = 0;              // 每次拍摄自增，用于「重拍丢弃」竞态判定
-  var currentPhotoId = null;     // 当前结果页照片在相册中的 id（自动保存后赋值）
-  var discardGen = -1;           // 若等于某次 shootGen，则该次照片在保存完成后立即删除
-  var photoKept = false;         // 用户已点「保存/分享」，重拍时不再丢弃
   var shootAbort = false;
   var vintageOn = true;
   var soundOn = true;
@@ -691,51 +682,31 @@
     }).catch(function () { renderPreviews(); });
   }
 
-  /* ---------------- result ---------------- */
+  /* ---------------- 拍摄完成：存入相册并留在拍摄界面 ---------------- */
   function finishShoot() {
     stopCamera();
     rawCanvas = compose(plates);
     finalCanvas = vintageOn ? vintageFilter(copyCanvas(rawCanvas)) : copyCanvas(rawCanvas);
-    renderResult();
 
-    el.plateStrip.innerHTML = '';
-    plates.forEach(function (p) {
-      var it = document.createElement('div');
-      it.className = 'pstrip-item';
-      it.innerHTML = '<img src="' + p.thumb.toDataURL() + '"><span>' + p.letter + '</span>';
-      el.plateStrip.appendChild(it);
-    });
-
-    // 自动存入历史（相册式）。若用户在结果页点「重拍」，则该张被丢弃（见 discardCurrentPhoto）
-    var myGen = ++shootGen;
-    currentPhotoId = null;
-    photoKept = false;
+    // 拍摄完成即存入相册，并即时刷新预览小窗；不跳转任何界面，保持可连续拍摄
     canvasToBlob(finalCanvas).then(function (blob) {
-      return dbAdd({ blob: blob, vintage: vintageOn, ts: Date.now() });
-    }).then(function (id) {
-      if (discardGen === myGen) { dbDel(id); return; }  /* 已点重拍 → 保存完成后立即删除 */
-      currentPhotoId = id;
-      toast('照片已存入「相册」');
+      var item = { blob: blob, vintage: vintageOn, ts: Date.now() };
+      return dbAdd(item).then(function (id) {
+        item.id = id;
+        lastPhotoItem = item;
+        renderPreviews();
+        toast('照片已存入「相册」');
+      });
     }).catch(function (e) { console.warn(e); });
 
-    showScreen('result');
-  }
-
-  function renderResult() {
-    var c = vintageOn ? finalCanvas : rawCanvas;
-    el.resultImg.src = c.toDataURL('image/jpeg', 0.92);
-    syncVintageBtns();
-  }
-
-  function syncVintageBtns() {
-    el.btnVintage2.classList.toggle('on', vintageOn);
-  }
-
-  function toggleVintage() {
-    if (state === 'shooting') return;
-    vintageOn = !vintageOn;
-    if (state === 'done') renderResult();
-    else syncVintageBtns();
+    // 回到可拍摄状态：重置界面并重新启动相机预览，可立即拍下一张
+    state = 'idle';
+    plates = [];
+    rawCanvas = finalCanvas = null;
+    resetPlates();
+    setGuide(null, false);
+    hideSpringTimer();
+    acquireAndPlay().catch(function (e) { toast(cameraErrorMessage(e), 3600); });
   }
 
   /* ---------------- save / share ---------------- */
@@ -781,17 +752,6 @@
       toast('已保存');
     }
     return Promise.resolve(true);
-  }
-
-  function onSave() {
-    photoKept = true;   /* 用户明确保留，重拍时不再丢弃 */
-    var c = vintageOn ? finalCanvas : rawCanvas;
-    canvasToBlob(c).then(function (blob) { return savePhoto(blob); });
-  }
-  function onShare() {
-    photoKept = true;   /* 用户明确保留，重拍时不再丢弃 */
-    var c = vintageOn ? finalCanvas : rawCanvas;
-    canvasToBlob(c).then(function (blob) { return sharePhoto(blob); });
   }
 
   /* ---------------- IndexedDB history ---------------- */
@@ -1141,35 +1101,6 @@
     });
   }
 
-  /* ---------------- retake ---------------- */
-  /* 重拍/丢弃当前结果页照片：用户未点过保存/分享才丢弃。
-     若自动保存已完成 → 立即从相册删除；若仍在保存中 → 标记 discardGen，
-     待其完成回调里删除（用 shootGen 代际避免与后续新拍摄竞态）。 */
-  function discardCurrentPhoto() {
-    if (photoKept) return;            /* 用户已保存/分享，保留在相册 */
-    discardGen = shootGen;
-    if (currentPhotoId != null) {
-      dbDel(currentPhotoId);
-      currentPhotoId = null;
-    }
-  }
-
-  function goCamera() {
-    discardCurrentPhoto();            /* 重拍：未保留的当前照片直接丢弃 */
-    stopCamera();
-    state = 'idle';
-    plates = [];
-    rawCanvas = finalCanvas = null;
-    resetPlates();
-    setGuide(null, false);
-    hideSpringTimer();
-    showScreen('camera');
-    updateSliderUI();
-    acquireAndPlay().catch(function (e) {
-      toast(cameraErrorMessage(e), 3600);
-    });
-  }
-
   /* ---------------- wiring ---------------- */
   el.btnStart.addEventListener('click', function () {
     el.btnStart.disabled = true;
@@ -1207,11 +1138,6 @@
     });
   });
   el.btnFlip.addEventListener('click', flipCamera);
-  el.btnVintage2.addEventListener('click', toggleVintage);
-  el.btnRetake.addEventListener('click', goCamera);
-  el.btnSave.addEventListener('click', onSave);
-  el.btnShare = document.getElementById('btn-share');
-  if (el.btnShare) el.btnShare.addEventListener('click', onShare);
 
   /* ---------------- 换版间隔滑轨 ---------------- */
   var SLIDER_PAD = 26; // 轨道左右留白（px），保证滑块两端不溢出
